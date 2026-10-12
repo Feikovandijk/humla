@@ -72,6 +72,7 @@ import { SkeletonLines } from "../components/Skeleton";
 import { NoteEditor } from "../components/Editor";
 import { ContextMenu, ContextMenuItem } from "../components/ContextMenu";
 import { ExportModal } from "./ExportModal";
+import { WebhookButton } from "../components/WebhookButton";
 import { SUMMARY_PRESETS, presetLabel } from "../lib/presets";
 import { LANGUAGES, languageOptionLabel } from "../lib/languages";
 import { useDeveloperMode } from "../lib/useDeveloperMode";
@@ -451,6 +452,10 @@ export function Note() {
   // touched since the last flush; when the timer fires it's sent as one
   // partial update and cleared.
   const pendingChanges = useRef<Partial<TNote>>({});
+  // Keep the editor authoritative until a transcript save reaches the store.
+  // The debounce queue is cleared before IPC returns, which otherwise leaves
+  // a window where Copy / Send would hand over the older stored transcript.
+  const transcriptSaves = useRef(0);
   // Mirror of the latest draft so the unmount flush can read it without
   // capturing a stale snapshot.
   const draftRef = useRef<TNote | null>(null);
@@ -915,9 +920,15 @@ export function Note() {
         const changes = pendingChanges.current;
         pendingChanges.current = {};
         if (Object.keys(changes).length === 0) return;
-        await ipc.updateNote(next.id, changes as Parameters<typeof ipc.updateNote>[1]);
-        const latest = draftRef.current ?? next;
-        upsert({ ...latest, ...changes });
+        const savesTranscript = "transcript" in changes;
+        if (savesTranscript) transcriptSaves.current += 1;
+        try {
+          await ipc.updateNote(next.id, changes as Parameters<typeof ipc.updateNote>[1]);
+          const latest = draftRef.current ?? next;
+          upsert({ ...latest, ...changes });
+        } finally {
+          if (savesTranscript) transcriptSaves.current -= 1;
+        }
       }, 300);
     },
     [upsert],
@@ -956,9 +967,15 @@ export function Note() {
         const changes = pendingChanges.current;
         pendingChanges.current = {};
         if (Object.keys(changes).length === 0) return;
-        await ipc.updateNote(next.id, changes as Parameters<typeof ipc.updateNote>[1]);
-        const latest = draftRef.current ?? next;
-        upsert({ ...latest, ...changes });
+        const savesTranscript = "transcript" in changes;
+        if (savesTranscript) transcriptSaves.current += 1;
+        try {
+          await ipc.updateNote(next.id, changes as Parameters<typeof ipc.updateNote>[1]);
+          const latest = draftRef.current ?? next;
+          upsert({ ...latest, ...changes });
+        } finally {
+          if (savesTranscript) transcriptSaves.current -= 1;
+        }
       }, 300);
     },
     [upsert],
@@ -1038,7 +1055,7 @@ export function Note() {
   // the timeline: the backend owns that projection (ADR-0004).
   const copyableTranscript = useCallback(
     () =>
-      ("transcript" in pendingChanges.current
+      ("transcript" in pendingChanges.current || transcriptSaves.current > 0
         ? draftRef.current?.transcript
         : note?.transcript) ??
       draftRef.current?.transcript ??
@@ -1106,6 +1123,14 @@ export function Note() {
       <div className="flex-1 min-w-0 flex flex-col relative">
         <NoteToolbar
           noteId={draft.id}
+          onSendWebhook={() => {
+            const current = draftRef.current!;
+            return ipc.webhookSendNote(current.id, {
+              title: current.title, body: current.body, summary: current.summary,
+              transcript: copyableTranscript(), language: current.language,
+              summary_preset: current.summary_preset, summary_provider: current.summary_provider,
+            });
+          }}
           backTo={backTo}
           backLabel={backLabel}
           readOnly={readOnly}
@@ -1845,6 +1870,7 @@ function formatElapsed(s: number) {
 // (not readOnly); during a recording the floating bar takes over.
 export function NoteToolbar({
   noteId,
+  onSendWebhook,
   backTo,
   backLabel,
   readOnly,
@@ -1859,6 +1885,7 @@ export function NoteToolbar({
   sidebarCollapsed,
 }: {
   noteId: string;
+  onSendWebhook?: () => Promise<number>;
   backTo: string;
   backLabel: string;
   readOnly: boolean;
@@ -1960,8 +1987,10 @@ export function NoteToolbar({
   // 300–900px in both themes and both sidebar states, and every band clears its
   // content by ≥6px. The floor is 275px of content, which `BODY_MIN` keeps out
   // of reach.
-  const BACK_LABEL = "truncate max-w-[180px] @max-[630px]:max-w-[90px] @max-[380px]:hidden";
-  const ACTION_LABEL = "@max-[570px]:hidden";
+  const BACK_LABEL = "truncate max-w-[180px] @max-[800px]:max-w-[90px] @max-[430px]:hidden";
+  const ACTION_LABEL = "@max-[720px]:hidden";
+  // Leave room for the optional webhook action at the body column's floor.
+  const ACTION_BUTTON = "no-drag nd-btn @max-[420px]:[--control-pad-x:8px]";
 
   return (
     <div data-tauri-drag-region className={cn("@container relative z-30 h-12 shrink-0 flex items-center gap-2 pr-3", sidebarCollapsed ? "pl-[116px]" : "pl-3")}>
@@ -1980,7 +2009,7 @@ export function NoteToolbar({
           <button
             onClick={record}
             disabled={!!recordBlock}
-            className="no-drag nd-btn"
+            className={ACTION_BUTTON}
             title={recordBlock ?? "Record (⌘R)"}
             aria-label="Record"
           >
@@ -1991,7 +2020,7 @@ export function NoteToolbar({
             <button
               onClick={() => void runTranscribe(noteId, "pending")}
               disabled={isTranscribing}
-              className="no-drag nd-btn"
+              className={ACTION_BUTTON}
               title="Transcribe the recorded audio"
               // The label is hidden below ACTION_LABEL's threshold, so the
               // accessible name has to come from here — and has to track the
@@ -2006,7 +2035,7 @@ export function NoteToolbar({
           )}
           <button
             onClick={() => void runSummarize(noteId, onSummarizeFailed)}
-            className="no-drag nd-btn nd-btn-primary"
+            className={`${ACTION_BUTTON} nd-btn-primary`}
             title="Summarize"
             aria-label="Summarize"
           >
@@ -2015,6 +2044,7 @@ export function NoteToolbar({
           </button>
         </>
       )}
+      <WebhookButton key={noteId} send={onSendWebhook ?? (() => ipc.webhookSendNote(noteId))} />
       <button
         onClick={onTogglePanel}
         className={cn("no-drag nd-btn-icon", panelOpen && "is-active")}

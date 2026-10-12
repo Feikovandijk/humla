@@ -45,6 +45,8 @@ mod summary_prompts;
 mod telemetry;
 mod title;
 mod transcription_config;
+mod webhook;
+pub use webhook::*;
 pub use api_keys::*;
 pub use assets::*;
 pub use chat::*;

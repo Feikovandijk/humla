@@ -102,7 +102,16 @@ export type ExportSpec = {
   includeSpeakerLabels: boolean;
 };
 
+export type WebhookConfig = {
+  enabled: boolean;
+  url: string;
+  headers: { name: string; value: string }[];
+};
+
+export type WebhookDraft = Pick<Note, "title" | "body" | "transcript" | "summary" | "language" | "summary_preset" | "summary_provider">;
+
 export type SettingsKey =
+  | "webhook_enabled"
   | "language"
   | "default_summary_preset"
   | "diarize_model"
@@ -376,6 +385,10 @@ export const ipc = {
     invoke<void>("notes_set_client", { id, clientId }),
 
   getSetting: (key: SettingsKey) => invoke<string | null>("settings_get", { key }),
+  webhookGetConfig: () => invoke<WebhookConfig>("webhook_get_config"),
+  webhookSetConfig: (config: WebhookConfig) => invoke<void>("webhook_set_config", { config }),
+  webhookSendNote: (noteId: string, draft?: WebhookDraft) =>
+    invoke<number>("webhook_send_note", { noteId, draft: draft ?? null }),
   setSetting: (key: SettingsKey, value: string) => invoke<void>("settings_set", { key, value }),
   /** Report one anonymous milestone. Fire-and-forget: the backend gates on the
    *  setting and on a once-per-install marker, so callers may call it freely and

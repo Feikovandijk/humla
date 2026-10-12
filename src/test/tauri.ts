@@ -24,6 +24,8 @@ export function mockTauri(
     if (cmd.startsWith("plugin:")) return undefined;
 
     switch (cmd) {
+      case "webhook_get_config":
+        return { enabled: false, url: "", headers: [] };
       case "settings_get": {
         const key = (args as { key?: string } | undefined)?.key;
         return key === "onboarding_completed" ? "true" : null;

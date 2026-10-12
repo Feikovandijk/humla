@@ -3,6 +3,7 @@ import { SettingsLayout } from "./settings/SettingsLayout";
 import { SECTIONS, type SectionId } from "./settings/sections";
 import { GeneralTab } from "./settings/tabs/General";
 import { IntegrationsSection } from "./settings/tabs/Integrations";
+import { WebhookSection } from "./settings/tabs/Webhook";
 import { RecordingSection } from "./settings/tabs/Recording";
 import { TranscriptionTab } from "./settings/tabs/Transcription";
 import { SummaryTab } from "./settings/tabs/Summary";
@@ -53,6 +54,7 @@ export function Settings() {
         {/* The MCP integration lives here rather than in its own section: the
             5-section IA is deliberate, and this is a switch plus two snippets. */}
         <IntegrationsSection s={settings.s} update={settings.update} />
+        <WebhookSection />
         <AboutTab />
       </>
     ),

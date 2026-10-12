@@ -31,6 +31,8 @@ export type EditableKey = Exclude<
   | "record_hotkey"
   // Owned by Home's offer card (src/lib/nemotronOffer.ts).
   | "nemotron_offer"
+  // Webhook settings use a dedicated, validated Keychain-backed form.
+  | "webhook_enabled"
 >;
 
 export type { Provider } from "../../lib/providers";

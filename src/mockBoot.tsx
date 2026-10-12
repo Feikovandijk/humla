@@ -33,6 +33,7 @@ import { Segmented } from "./pages/settings/components/Segmented";
 import { Toggle } from "./pages/settings/components/Toggle";
 import { NoteTitleBox, NoteToolbar, PanelEmpty, TranscriptEditor, TranscriptPlayer } from "./pages/Note";
 import { IntegrationsSection } from "./pages/settings/tabs/Integrations";
+import { WebhookSection } from "./pages/settings/tabs/Webhook";
 import { ChatTab } from "./pages/settings/tabs/Chat";
 import { RecordingSection } from "./pages/settings/tabs/Recording";
 import { TranscriptionTab } from "./pages/settings/tabs/Transcription";
@@ -1096,6 +1097,28 @@ function chatPinsCase(pinned: boolean): Scenario {
 }
 
 const CASES: Record<string, Scenario> = {
+  "webhook-settings": {
+    wrap: settingsWrap,
+    render: () => <WebhookSection />,
+    ipc: {
+      webhook_get_config: () => ({ enabled: true, url: "https://example.com/meetings", headers: [{ name: "Authorization", value: "Bearer demo-token" }] }),
+      webhook_set_config: () => null,
+    },
+  },
+  "webhook-note": {
+    route: "/note/webhook-demo",
+    render: () => null,
+    ipc: {
+      notes_list: () => [makeNote({ id: "webhook-demo", title: "Weekly planning", body: "<p>Confirm the launch date.</p>", transcript: "You: Ready?\nAlex: Yes.", summary: "- Launch confirmed." })],
+      notes_get: () => makeNote({ id: "webhook-demo", title: "Weekly planning", body: "<p>Confirm the launch date.</p>", transcript: "You: Ready?\nAlex: Yes.", summary: "- Launch confirmed." }),
+      settings_get: (args) => (args as { key: string }).key === "webhook_enabled" ? "true" : null,
+      webhook_send_note: () => 204,
+    },
+  },
+  "webhook-toolbar-narrow": {
+    ...toolbarCase(420, true, true),
+    ipc: { settings_get: () => "true", webhook_send_note: () => 204 },
+  },
   home: {
     route: "/",
     render: () => null,
