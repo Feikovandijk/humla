@@ -8,10 +8,10 @@ import { mockLayoutBox } from "../test/layout";
 
 beforeAll(() => mockLayoutBox());
 
-// `/note/:id` re-renders the same Note component when the id changes, so the
-// autosave queue outlives a switch between notes. These pin that an edit is
-// saved to the note it was typed into, whichever note is on screen when its
-// batch goes out.
+// The note view's autosave queue (`flushSave`): edits within 300 ms go out as
+// one save, and leaving the note before the timer fires still saves them, to
+// the note they were typed into.
+
 function GoTo({ path }: { path: string }) {
   const navigate = useNavigate();
   return <button onClick={() => navigate(path)}>go to {path}</button>;
@@ -37,17 +37,43 @@ function renderNotes() {
 
 const titleBox = () => screen.getByPlaceholderText("New note");
 
+async function settled(save: ReturnType<typeof vi.fn>) {
+  await waitFor(() => expect(titleBox()).toHaveValue("Planning"));
+  // Let the editor's mount-time write go out, so what follows is only what the
+  // test types.
+  await act(() => new Promise((r) => setTimeout(r, 400)));
+  save.mockClear();
+}
+
 describe("note autosave", () => {
   it("sends quick successive edits as one save of the latest value", async () => {
     const { save } = renderNotes();
-    await waitFor(() => expect(titleBox()).toHaveValue("Planning"));
+    await settled(save);
     fireEvent.change(titleBox(), { target: { value: "Planning v2" } });
     fireEvent.change(titleBox(), { target: { value: "Planning v3" } });
 
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
-    expect(save).toHaveBeenCalledWith({ id: "a", patch: expect.objectContaining({ title: "Planning v3" }) });
+    expect(save).toHaveBeenCalledWith({ id: "a", patch: { title: "Planning v3" } });
     // Nothing else is queued behind it.
     await act(() => new Promise((r) => setTimeout(r, 400)));
     expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves an edit to its own note when the user leaves before the timer fires", async () => {
+    const { save } = renderNotes();
+    await settled(save);
+
+    // Leave inside the debounce window. The clock is frozen so the timer
+    // can't fire first and make the unmount's flush look unnecessary.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      fireEvent.change(titleBox(), { target: { value: "Planning v2" } });
+      fireEvent.click(screen.getByRole("button", { name: "go to /note/b" }));
+      await act(async () => {});
+      expect(save).toHaveBeenCalledWith({ id: "a", patch: { title: "Planning v2" } });
+    } finally {
+      vi.useRealTimers();
+    }
+    await waitFor(() => expect(titleBox()).toHaveValue("Retro"));
   });
 });
