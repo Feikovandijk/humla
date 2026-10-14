@@ -1972,6 +1972,19 @@ pub fn parse_speaker_turns(transcript: &str) -> Vec<Turn> {
         .collect()
 }
 
+/// Everyone who speaks in `transcript`, once each, in first-encounter order —
+/// the same labels [`parse_speaker_turns`] reads, so nothing that isn't a label
+/// (`12:30 standup`) is ever named as a speaker.
+pub fn transcript_speakers(transcript: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for turn in parse_speaker_turns(transcript) {
+        if let Some(speaker) = &turn.speaker {
+            push_distinct(&mut out, speaker);
+        }
+    }
+    out
+}
+
 /// The speaker label of one line, or `None`. See [`parse_speaker_turns`] for the
 /// rule this pins.
 fn speaker_label(line: &str) -> Option<String> {
@@ -4190,6 +4203,15 @@ mod tests {
         let turns = parse_speaker_turns("Michael: one\n\n   \nHege: two");
         assert_eq!(turns.len(), 2, "blank lines contribute no turns");
         assert_eq!(turns[0].text, "Michael: one", "text keeps the label inline");
+    }
+
+    #[test]
+    fn transcript_speakers_names_each_voice_once_in_order_of_arrival() {
+        let speakers = transcript_speakers(
+            "Intro without a label\nÅse: Hello\nYou: Hi\nÅse: https://example.com\n12:30 standup",
+        );
+        assert_eq!(speakers, vec!["Åse".to_string(), "You".to_string()]);
+        assert!(transcript_speakers("").is_empty());
     }
 
     #[test]

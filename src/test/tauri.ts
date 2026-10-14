@@ -71,6 +71,8 @@ export function mockTauri(
         };
       case "provider_key_get":
         return null;
+      case "webhook_get_endpoint":
+        return { url: "", headers: [] };
       case "anthropic_list_models":
       case "openai_list_models":
         return [];

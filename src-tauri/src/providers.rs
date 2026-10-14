@@ -57,7 +57,7 @@ pub struct ProviderSpec {
     pub id_str: &'static str,
     /// Display name for user-facing copy.
     pub label: &'static str,
-    /// Keychain account under `KEYCHAIN_SERVICE`; `None` for a provider that
+    /// Keychain account under `keychain::SERVICE`; `None` for a provider that
     /// takes no key.
     pub keychain_account: Option<&'static str>,
     pub key_test: Option<KeyTest>,

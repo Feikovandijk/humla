@@ -33,6 +33,7 @@ import { Segmented } from "./pages/settings/components/Segmented";
 import { Toggle } from "./pages/settings/components/Toggle";
 import { NoteTitleBox, NoteToolbar, PanelEmpty, TranscriptEditor, TranscriptPlayer } from "./pages/Note";
 import { IntegrationsSection } from "./pages/settings/tabs/Integrations";
+import { SendToWebhookModal } from "./pages/SendToWebhookModal";
 import { ChatTab } from "./pages/settings/tabs/Chat";
 import { RecordingSection } from "./pages/settings/tabs/Recording";
 import { TranscriptionTab } from "./pages/settings/tabs/Transcription";
@@ -378,6 +379,7 @@ function toolbarCase(
         onTogglePanel={() => {}}
         onSummarizeFailed={() => {}}
         onRegenerateTitle={() => {}}
+        flushEdits={async () => {}}
         pendingTranscription={pending}
         isTranscribing={false}
         sidebarCollapsed={sidebarCollapsed}
@@ -406,20 +408,51 @@ const settingsWrap: Scenario["wrap"] = (node) => (
 // `settingsWrap` mirrors SettingsLayout's content column — the Section card
 // fills its container, so a full-width wrapper would stretch the snippets far
 // past what they ever get in the real dialog.
-function integrationsCase(enabled: boolean): Scenario {
+//
+// #213 adds the webhook rows to the same section. `webhook` turns them on with
+// a saved endpoint, so the stored header reads as a name over an empty value.
+function integrationsCase(enabled: boolean, webhook = false): Scenario {
   return {
     wrap: settingsWrap,
-    render: () => <IntegrationsHarness enabled={enabled} />,
+    render: () => <IntegrationsHarness mcp={enabled} webhook={webhook} />,
     ipc: {
       mcp_server_path: () => "/Applications/Humla.app/Contents/MacOS/humla-mcp",
+      webhook_get_endpoint: () => ({
+        url: "https://hooks.example.com/humla/ingest",
+        headers: ["Authorization"],
+      }),
+      webhook_set_endpoint: () => undefined,
     },
   };
 }
 
-function IntegrationsHarness({ enabled }: { enabled: boolean }) {
-  const [on, setOn] = useState(enabled ? "true" : "false");
-  const s = { ...DEFAULTS, mcp_enabled: on } as Record<EditableKey, string>;
-  return <IntegrationsSection s={s} update={(_k, v) => setOn(v)} />;
+function IntegrationsHarness({ mcp, webhook }: { mcp: boolean; webhook: boolean }) {
+  const [s, setS] = useState({
+    ...DEFAULTS,
+    mcp_enabled: String(mcp),
+    webhook_enabled: String(webhook),
+  } as Record<EditableKey, string>);
+  return <IntegrationsSection s={s} update={(k, v) => setS((p) => ({ ...p, [k]: v }))} />;
+}
+
+// ---- #213: the confirmation before a note is sent. What needs eyes is the
+// receiver's host sitting in the sentence, and the unset state's error with
+// its way out to Settings.
+function webhookSendCase(destination: string | null): Scenario {
+  const note = makeNote({ id: "n1", title: "Weekly planning" });
+  return {
+    wrap: (node) => <MemoryRouter>{node}</MemoryRouter>,
+    render: () => (
+      <SendToWebhookModal note={note} open onClose={() => {}} flushEdits={async () => {}} />
+    ),
+    ipc: {
+      webhook_destination: () => {
+        if (destination === null) throw "Add a webhook URL in Settings → General → Integrations first.";
+        return destination;
+      },
+      webhook_send_note: () => undefined,
+    },
+  };
 }
 
 // ---- #179: the local chat provider, on Ollama and on a server that is not
@@ -1173,6 +1206,11 @@ const CASES: Record<string, Scenario> = {
   // --- #172: the MCP switch, off (the default) and on (snippets revealed).
   "mcp-off": integrationsCase(false),
   "mcp-on": integrationsCase(true),
+
+  // --- #213: the webhook rows with a saved endpoint, and the send's confirmation.
+  "webhook-settings": integrationsCase(false, true),
+  "webhook-send": webhookSendCase("hooks.example.com"),
+  "webhook-send-unset": webhookSendCase(null),
 
   // --- #147: the issue's exact report — recommended model already pulled.
   recommended: summaryCase(["gemma4:12b-mlx", "embeddinggemma"]),

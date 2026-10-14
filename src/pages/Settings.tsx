@@ -50,8 +50,9 @@ export function Settings() {
     general: (
       <>
         <GeneralTab />
-        {/* The MCP integration lives here rather than in its own section: the
-            5-section IA is deliberate, and this is a switch plus two snippets. */}
+        {/* The integrations (MCP, the webhook) live here rather than in their
+            own section: the 5-section IA is deliberate, and each is a switch
+            plus what it needs once on. */}
         <IntegrationsSection s={settings.s} update={settings.update} />
         <AboutTab />
       </>

@@ -4,8 +4,12 @@ import { CommandSnippet } from "../../../components/CommandSnippet";
 import { Row, Section } from "../components/Section";
 import { Toggle } from "../components/Toggle";
 import type { EditableKey } from "../types";
+import { WebhookRows } from "./Webhook";
 
-// The MCP integration (#172): one switch, and a config snippet per client.
+// The ways the user's own tools reach their notes: the MCP server (#172), which
+// they read from, and the webhook (#213, `WebhookRows`), which a note is sent to.
+//
+// The MCP integration: one switch, and a config snippet per client.
 //
 // Off by default and explicitly opt-in — this hands an outside agent the
 // contents of real meetings, so installing an update must never quietly open
@@ -86,6 +90,7 @@ export function IntegrationsSection({
           </Row>
         </>
       )}
+      <WebhookRows s={s} update={update} />
     </Section>
   );
 }

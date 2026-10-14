@@ -72,6 +72,8 @@ import { SkeletonLines } from "../components/Skeleton";
 import { NoteEditor } from "../components/Editor";
 import { ContextMenu, ContextMenuItem } from "../components/ContextMenu";
 import { ExportModal } from "./ExportModal";
+import { SendToWebhookModal } from "./SendToWebhookModal";
+import { useWebhookSends } from "../lib/webhook";
 import { SUMMARY_PRESETS, presetLabel } from "../lib/presets";
 import { LANGUAGES, languageOptionLabel } from "../lib/languages";
 import { useDeveloperMode } from "../lib/useDeveloperMode";
@@ -120,6 +122,13 @@ async function runSummarize(noteId: string, onFailure?: () => void) {
     onFailure?.();
     useRecordingStore.getState().pushError({ noteId, message: String(e), kind: "summary" });
   }
+}
+
+/** Where a failed autosave goes. Nothing awaits one — the debounce timer and
+ *  the unmount both fire and forget — so it is logged rather than left as an
+ *  unhandled rejection. */
+function warnSaveFailed(e: unknown) {
+  console.warn("[note] save failed:", e);
 }
 
 /** Kick off a transcription run (#146), surfacing failures as a toast.
@@ -448,9 +457,13 @@ export function Note() {
   // single saveTimer used to capture only one field's value per cycle —
   // editing title then body within 300 ms would clear the title's
   // setTimeout and never persist it. This object collects every field
-  // touched since the last flush; when the timer fires it's sent as one
-  // partial update and cleared.
+  // touched since the last flush; `flushSave` sends it as one partial
+  // update and clears it.
   const pendingChanges = useRef<Partial<TNote>>({});
+  // Batches sent but not yet confirmed, with the fields each carries. A flush
+  // awaits them, and `isUnsaved` reads them: between a batch leaving the queue
+  // and its IPC returning, the store still holds the previous value.
+  const inFlightSaves = useRef(new Map<Promise<void>, Partial<TNote>>());
   // Mirror of the latest draft so the unmount flush can read it without
   // capturing a stale snapshot.
   const draftRef = useRef<TNote | null>(null);
@@ -469,26 +482,61 @@ export function Note() {
     };
   }, []);
 
-  // On unmount, flush any pending edits that haven't fired their timer
-  // yet. Fire-and-forget — the Tauri invoke promise survives the React
-  // teardown. Without this, navigating away within the 300 ms window
-  // loses the user's last edit.
-  useEffect(() => {
-    return () => {
-      if (saveTimer.current) {
-        window.clearTimeout(saveTimer.current);
-        saveTimer.current = null;
-      }
-      const changes = pendingChanges.current;
-      pendingChanges.current = {};
-      const d = draftRef.current;
-      if (!d) return;
-      const keys = Object.keys(changes);
-      if (keys.length === 0) return;
-      void ipc.updateNote(d.id, changes as Parameters<typeof ipc.updateNote>[1]);
-      upsert({ ...d, ...changes });
-    };
+  // The one way a field edit reaches the database: the debounce timer, the
+  // unmount, and every action that reads the note back from the backend
+  // (Export, Send to webhook), which awaits it so the backend works from what
+  // the user sees. Resolves once the queued batch and every batch already in
+  // flight have landed; rejects if one of them failed.
+  //
+  // One note per batch by construction: `Layout` keys the routed view on the
+  // pathname, so this component is remounted for every note and the unmount
+  // flush below sends the last one's batch before the next note's can start.
+  const flushSave = useCallback((): Promise<void> => {
+    if (saveTimer.current) {
+      window.clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    const changes = pendingChanges.current;
+    pendingChanges.current = {};
+    const noteId = draftRef.current?.id;
+    if (noteId && Object.keys(changes).length > 0) {
+      const save: Promise<void> = ipc
+        .updateNote(noteId, changes as Parameters<typeof ipc.updateNote>[1])
+        .then(() => {
+          // The draft as it is now, which may hold newer edits than this batch
+          // (their own batch saves them).
+          const latest = draftRef.current;
+          if (latest) upsert({ ...latest, ...changes });
+        })
+        .finally(() => inFlightSaves.current.delete(save));
+      inFlightSaves.current.set(save, changes);
+    }
+    return Promise.all(inFlightSaves.current.keys()).then(() => undefined);
   }, [upsert]);
+
+  // Queue one field edit. Edits within 300 ms go out as one partial update.
+  const queueSave = useCallback(
+    <K extends keyof TNote>(field: K, value: TNote[K]) => {
+      pendingChanges.current = { ...pendingChanges.current, [field]: value };
+      if (saveTimer.current) window.clearTimeout(saveTimer.current);
+      saveTimer.current = window.setTimeout(() => void flushSave().catch(warnSaveFailed), 300);
+    },
+    [flushSave],
+  );
+
+  // Whether the store may not hold `field`'s latest value yet: an edit is still
+  // queued, or its save hasn't come back.
+  const isUnsaved = useCallback(
+    (field: keyof TNote) =>
+      field in pendingChanges.current ||
+      [...inFlightSaves.current.values()].some((changes) => field in changes),
+    [],
+  );
+
+  // On unmount, send any edits whose timer hasn't fired yet. Fire-and-forget —
+  // the Tauri invoke promise survives the React teardown. Without this,
+  // navigating away within the 300 ms window loses the user's last edit.
+  useEffect(() => () => void flushSave().catch(warnSaveFailed), [flushSave]);
 
   useEffect(() => {
     let cancelled = false;
@@ -906,21 +954,10 @@ export function Note() {
       const cur = draftRef.current;
       if (!cur) return;
       if (readOnlyRef.current) return; // viewer: no local edits (server rejects too)
-      const next = { ...cur, [field]: value };
-      setDraft(next);
-      pendingChanges.current = { ...pendingChanges.current, [field]: value };
-      if (saveTimer.current) window.clearTimeout(saveTimer.current);
-      saveTimer.current = window.setTimeout(async () => {
-        saveTimer.current = null;
-        const changes = pendingChanges.current;
-        pendingChanges.current = {};
-        if (Object.keys(changes).length === 0) return;
-        await ipc.updateNote(next.id, changes as Parameters<typeof ipc.updateNote>[1]);
-        const latest = draftRef.current ?? next;
-        upsert({ ...latest, ...changes });
-      }, 300);
+      setDraft({ ...cur, [field]: value });
+      queueSave(field, value);
     },
-    [upsert],
+    [queueSave],
   );
 
   // ⋯ → Regenerate title (#90). The title box goes read-only and dims while the
@@ -947,21 +984,10 @@ export function Note() {
       const cur = draftRef.current;
       if (!cur) return;
       if (readOnlyRef.current) return; // viewer: read-only
-      const next = { ...cur, summary_provider: value };
-      setDraft(next);
-      pendingChanges.current = { ...pendingChanges.current, summary_provider: value };
-      if (saveTimer.current) window.clearTimeout(saveTimer.current);
-      saveTimer.current = window.setTimeout(async () => {
-        saveTimer.current = null;
-        const changes = pendingChanges.current;
-        pendingChanges.current = {};
-        if (Object.keys(changes).length === 0) return;
-        await ipc.updateNote(next.id, changes as Parameters<typeof ipc.updateNote>[1]);
-        const latest = draftRef.current ?? next;
-        upsert({ ...latest, ...changes });
-      }, 300);
+      setDraft({ ...cur, summary_provider: value });
+      queueSave("summary_provider", value);
     },
-    [upsert],
+    [queueSave],
   );
 
   // Stable callbacks for the memoized transcript components. Without
@@ -1033,17 +1059,15 @@ export function Note() {
   // in the backend and it arrives on `transcript_replaced`; the draft
   // deliberately refuses to adopt store transcript updates while idle (see
   // `allowTranscriptSync`) so a debounced save can't clobber typing. So read
-  // the store — except while our own free-text edit is still queued, where the
-  // draft is the newer of the two. Nothing here re-derives the transcript from
-  // the timeline: the backend owns that projection (ADR-0004).
+  // the store — except while our own free-text edit is still queued or saving,
+  // where the draft is the newer of the two. Nothing here re-derives the
+  // transcript from the timeline: the backend owns that projection (ADR-0004).
   const copyableTranscript = useCallback(
     () =>
-      ("transcript" in pendingChanges.current
-        ? draftRef.current?.transcript
-        : note?.transcript) ??
+      (isUnsaved("transcript") ? draftRef.current?.transcript : note?.transcript) ??
       draftRef.current?.transcript ??
       "",
-    [note?.transcript],
+    [note?.transcript, isUnsaved],
   );
 
   if (!draft) return null;
@@ -1115,6 +1139,7 @@ export function Note() {
           onTogglePanel={() => setPanelOpen((v) => !v)}
           onSummarizeFailed={clearSummaryStream}
           onRegenerateTitle={regenerateTitle}
+          flushEdits={flushSave}
           pendingTranscription={pendingTranscription}
           isTranscribing={isTranscribing}
           sidebarCollapsed={sidebarCollapsed}
@@ -1854,6 +1879,7 @@ export function NoteToolbar({
   onTogglePanel,
   onSummarizeFailed,
   onRegenerateTitle,
+  flushEdits,
   pendingTranscription,
   isTranscribing,
   sidebarCollapsed,
@@ -1877,6 +1903,10 @@ export function NoteToolbar({
   // Regenerate title (#90). Owned by `Note` rather than run here: the busy
   // state belongs on the title box, not in a menu Radix closes on select.
   onRegenerateTitle: () => void;
+  // Sends the note's queued edits and resolves once they're saved. Awaited by
+  // every action here that reads the note back from the backend, so it never
+  // works from an older copy than the one on screen.
+  flushEdits: () => Promise<void>;
   sidebarCollapsed: boolean;
 }) {
   const navigate = useNavigate();
@@ -1895,6 +1925,13 @@ export function NoteToolbar({
   const canRegenerateTitle = hasTitleSource && !isTitling && !recActive && !isTranscribing;
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  // Send to webhook (#213) sits beside Export in this menu, not in the bar: it
+  // is opt-in, so a button would spend the bar's width on something most users
+  // never turn on, and it is the same act as Export (a note leaving the app).
+  // Inside the menu it is also gated on `readOnly` the way Export is.
+  const webhookEnabled = useLiveSetting("webhook_enabled") === "true";
+  const sendingToWebhook = useWebhookSends((s) => !!s.sending[noteId]);
+  const [webhookOpen, setWebhookOpen] = useState(false);
   // The export sheet's team hint opens this. Deliberately NOT the same instance
   // as the read-only banner's in `Note` above: that one rescues the workspace a
   // note already belongs to and only exists when there is one, while the hint
@@ -2052,6 +2089,17 @@ export function NoteToolbar({
               Export…
             </ContextMenuItem>
           )}
+          {note && webhookEnabled && (
+            <ContextMenuItem
+              disabled={sendingToWebhook}
+              onClick={() => {
+                setMenuPos(null);
+                setWebhookOpen(true);
+              }}
+            >
+              {sendingToWebhook ? "Sending to webhook…" : "Send to webhook…"}
+            </ContextMenuItem>
+          )}
           <ContextMenuItem
             disabled={!canRegenerateTitle}
             onClick={() => {
@@ -2071,7 +2119,16 @@ export function NoteToolbar({
           note={note}
           open={exportOpen}
           onClose={() => setExportOpen(false)}
+          flushEdits={flushEdits}
           onCreateTeam={() => setTeamHintOpen(true)}
+        />
+      )}
+      {note && (
+        <SendToWebhookModal
+          note={note}
+          open={webhookOpen}
+          onClose={() => setWebhookOpen(false)}
+          flushEdits={flushEdits}
         />
       )}
       {/* Outside the ExportModal above on purpose: the hint closes that modal on
