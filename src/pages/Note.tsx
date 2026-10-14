@@ -72,7 +72,8 @@ import { SkeletonLines } from "../components/Skeleton";
 import { NoteEditor } from "../components/Editor";
 import { ContextMenu, ContextMenuItem } from "../components/ContextMenu";
 import { ExportModal } from "./ExportModal";
-import { WebhookButton } from "../components/WebhookButton";
+import { SendToWebhookModal } from "./SendToWebhookModal";
+import { useWebhookSends } from "../lib/webhook";
 import { SUMMARY_PRESETS, presetLabel } from "../lib/presets";
 import { LANGUAGES, languageOptionLabel } from "../lib/languages";
 import { useDeveloperMode } from "../lib/useDeveloperMode";
@@ -482,9 +483,10 @@ export function Note() {
   }, []);
 
   // The one way a field edit reaches the database: the debounce timer, the
-  // unmount, and every action that reads the note back from the backend (Export, Send to webhook), which awaits it so the
-  // backend works from what the user sees. Resolves once the queued batch and
-  // every batch already in flight have landed; rejects if one of them failed.
+  // unmount, and every action that reads the note back from the backend
+  // (Export, Send to webhook), which awaits it so the backend works from what
+  // the user sees. Resolves once the queued batch and every batch already in
+  // flight have landed; rejects if one of them failed.
   //
   // One note per batch by construction: `Layout` keys the routed view on the
   // pathname, so this component is remounted for every note and the unmount
@@ -1128,14 +1130,6 @@ export function Note() {
       <div className="flex-1 min-w-0 flex flex-col relative">
         <NoteToolbar
           noteId={draft.id}
-          onSendWebhook={() => {
-            const current = draftRef.current!;
-            return ipc.webhookSendNote(current.id, {
-              title: current.title, body: current.body, summary: current.summary,
-              transcript: copyableTranscript(), language: current.language,
-              summary_preset: current.summary_preset, summary_provider: current.summary_provider,
-            });
-          }}
           backTo={backTo}
           backLabel={backLabel}
           readOnly={readOnly}
@@ -1876,7 +1870,6 @@ function formatElapsed(s: number) {
 // (not readOnly); during a recording the floating bar takes over.
 export function NoteToolbar({
   noteId,
-  onSendWebhook,
   backTo,
   backLabel,
   readOnly,
@@ -1892,7 +1885,6 @@ export function NoteToolbar({
   sidebarCollapsed,
 }: {
   noteId: string;
-  onSendWebhook?: () => Promise<number>;
   backTo: string;
   backLabel: string;
   readOnly: boolean;
@@ -1922,6 +1914,13 @@ export function NoteToolbar({
   const note = useNotesStore((s) => s.notes.find((n) => n.id === noteId));
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  // Send to webhook (#213) sits beside Export in this menu, not in the bar: it
+  // is opt-in, so a button would spend the bar's width on something most users
+  // never turn on, and it is the same act as Export (a note leaving the app).
+  // Inside the menu it is also gated on `readOnly` the way Export is.
+  const webhookEnabled = useLiveSetting("webhook_enabled") === "true";
+  const sendingToWebhook = useWebhookSends((s) => !!s.sending[noteId]);
+  const [webhookOpen, setWebhookOpen] = useState(false);
   // The export sheet's team hint opens this. Deliberately NOT the same instance
   // as the read-only banner's in `Note` above: that one rescues the workspace a
   // note already belongs to and only exists when there is one, while the hint
@@ -1998,10 +1997,8 @@ export function NoteToolbar({
   // 300–900px in both themes and both sidebar states, and every band clears its
   // content by ≥6px. The floor is 275px of content, which `BODY_MIN` keeps out
   // of reach.
-  const BACK_LABEL = "truncate max-w-[180px] @max-[800px]:max-w-[90px] @max-[430px]:hidden";
-  const ACTION_LABEL = "@max-[720px]:hidden";
-  // Leave room for the optional webhook action at the body column's floor.
-  const ACTION_BUTTON = "no-drag nd-btn @max-[420px]:[--control-pad-x:8px]";
+  const BACK_LABEL = "truncate max-w-[180px] @max-[630px]:max-w-[90px] @max-[380px]:hidden";
+  const ACTION_LABEL = "@max-[570px]:hidden";
 
   return (
     <div data-tauri-drag-region className={cn("@container relative z-30 h-12 shrink-0 flex items-center gap-2 pr-3", sidebarCollapsed ? "pl-[116px]" : "pl-3")}>
@@ -2020,7 +2017,7 @@ export function NoteToolbar({
           <button
             onClick={record}
             disabled={!!recordBlock}
-            className={ACTION_BUTTON}
+            className="no-drag nd-btn"
             title={recordBlock ?? "Record (⌘R)"}
             aria-label="Record"
           >
@@ -2031,7 +2028,7 @@ export function NoteToolbar({
             <button
               onClick={() => void runTranscribe(noteId, "pending")}
               disabled={isTranscribing}
-              className={ACTION_BUTTON}
+              className="no-drag nd-btn"
               title="Transcribe the recorded audio"
               // The label is hidden below ACTION_LABEL's threshold, so the
               // accessible name has to come from here — and has to track the
@@ -2046,7 +2043,7 @@ export function NoteToolbar({
           )}
           <button
             onClick={() => void runSummarize(noteId, onSummarizeFailed)}
-            className={`${ACTION_BUTTON} nd-btn-primary`}
+            className="no-drag nd-btn nd-btn-primary"
             title="Summarize"
             aria-label="Summarize"
           >
@@ -2055,7 +2052,6 @@ export function NoteToolbar({
           </button>
         </>
       )}
-      <WebhookButton key={noteId} send={onSendWebhook ?? (() => ipc.webhookSendNote(noteId))} />
       <button
         onClick={onTogglePanel}
         className={cn("no-drag nd-btn-icon", panelOpen && "is-active")}
@@ -2082,6 +2078,17 @@ export function NoteToolbar({
               Export…
             </ContextMenuItem>
           )}
+          {note && webhookEnabled && (
+            <ContextMenuItem
+              disabled={sendingToWebhook}
+              onClick={() => {
+                setMenuPos(null);
+                setWebhookOpen(true);
+              }}
+            >
+              {sendingToWebhook ? "Sending to webhook…" : "Send to webhook…"}
+            </ContextMenuItem>
+          )}
           <ContextMenuItem
             onClick={() => {
               setMenuPos(null);
@@ -2102,6 +2109,14 @@ export function NoteToolbar({
           onClose={() => setExportOpen(false)}
           flushEdits={flushEdits}
           onCreateTeam={() => setTeamHintOpen(true)}
+        />
+      )}
+      {note && (
+        <SendToWebhookModal
+          note={note}
+          open={webhookOpen}
+          onClose={() => setWebhookOpen(false)}
+          flushEdits={flushEdits}
         />
       )}
       {/* Outside the ExportModal above on purpose: the hint closes that modal on

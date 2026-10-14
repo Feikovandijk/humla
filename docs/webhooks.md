@@ -1,25 +1,50 @@
-# Send a meeting to a webhook
+# Send a note to a webhook
 
-In **Settings → General → Webhook**, enable the webhook, enter the receiver URL,
-add any authentication headers, and click **Save webhook**. The URL and headers
-are kept in macOS Keychain on this device; they are not synced to teammates.
-Header values are masked in Settings. Use HTTPS for remote receivers; HTTP is
-also supported for local services.
+Humla can POST a note to a URL you choose, so your own tools (a knowledge
+base, an agent, an n8n or Zapier flow) can receive the meeting. A note is sent
+only when you send it. Nothing goes out in the background.
 
-Click **Send to webhook** in a note's toolbar, then **Yes** in the confirmation
-dialog to POST its current contents as `application/json`. **No**, Escape, or
-clicking outside the dialog cancels without sending. The button is hidden until
-enabled. Each confirmation sends one
-snapshot, including edits still waiting for autosave. Sending during a recording
-sends the transcript available at that moment; send again after processing to
-update your receiver with the finished meeting.
+## Setting it up
 
-The receiver should upsert by `note.id` to support sending the same note again.
-There is no background sync, deletion event, or automatic retry. A successful
-2xx response is shown as sent; this confirms the receiver accepted the request,
-not that any downstream workflow finished. Requests time out after 30 seconds.
-A timeout/network error can leave delivery uncertain, so check the receiver
-before sending again. Redirects are rejected: configure the final endpoint URL.
+In **Settings → General → Integrations**, turn on **Send notes to a webhook**,
+enter the receiver's URL, add any headers it needs for authentication (for
+example `Authorization` with a value of `Bearer <token>`), and click **Save
+webhook**.
+
+- The URL and headers are kept in the macOS Keychain on this Mac. They are not
+  synced and not stored in Humla's database.
+- A saved header's value is never shown again. Leave its field empty to keep
+  it, or type a new one to replace it. Renaming a header needs its value
+  re-entered.
+- Use HTTPS for anything that isn't on your own machine. HTTP is accepted for
+  local receivers.
+- Put authentication in a header, not in the URL. A URL with a username or
+  password, or with a `#fragment`, is refused. A token in the query string
+  works but is less private: it travels in the URL.
+
+## Sending a note
+
+Open the note's **⋯** menu and choose **Send to webhook…**. The confirmation
+names the receiver's host (never its path or query, which often hold a
+token). **Send** posts the note; **Cancel**, Escape or a click outside sends
+nothing. Your latest edits are saved first, so the receiver gets what is on
+screen.
+
+- **Send again to update.** Each send is a full snapshot of the note. Your
+  receiver should upsert by `note.id`.
+- **No retries, no redirects.** A send is one request with a 10 s connect
+  timeout and a 30 s overall timeout. A redirect is treated as a failure: put
+  the final URL in Settings.
+- **Success means the receiver accepted it.** Any 2xx reads as sent, which
+  says nothing about what your workflow did with it afterwards.
+- **A timeout is uncertain.** The receiver may still have got the note. Check
+  before sending again.
+- **Sending during a recording** sends the transcript so far, with
+  `recording.in_progress` set. Send again once the recording is processed.
+- There is no event for a deleted note. A note in the Trash can't be sent.
+
+The request is `POST` with `Content-Type: application/json` and
+`User-Agent: Humla/<version>`, plus your headers.
 
 ## Payload (schema version 1)
 
@@ -27,89 +52,83 @@ before sending again. Redirects are rejected: configure the final endpoint URL.
 {
   "schema_version": 1,
   "event": "note.sent",
-  "sent_at": "2026-10-10T12:00:00+00:00",
+  "sent_at": "2026-10-12T09:45:00.000Z",
   "note": {
-    "id": "note-uuid",
+    "id": "5f0c3a52-8a8e-4a0e-9a53-0b8c1f3e6c21",
     "title": "Weekly planning",
-    "body": "<p>Confirm the launch date.</p>",
-    "body_text": "Confirm the launch date.",
-    "transcript": "You: Ready?\nAlex: Yes.",
-    "summary": "- Launch confirmed.",
-    "speakers": ["You", "Alex"],
+    "created_at": "2026-10-12T08:58:12.000Z",
+    "updated_at": "2026-10-12T09:44:03.000Z",
     "language": "en",
-    "detected_language": null,
-    "summary_preset": "meeting",
-    "summary_provider": "",
-    "expected_speakers": null,
-    "folder_id": null,
-    "client_id": null,
-    "workspace_id": "",
-    "owner": "",
-    "private": false,
-    "created_at": 1791633600000,
-    "updated_at": 1791633600000,
-    "meeting": {
-      "started_at": "2026-10-10T09:00:00+00:00",
-      "ended_at": "2026-10-10T09:30:00+00:00",
+    "folder": { "id": "1d7e…", "name": "Product" },
+    "client": null,
+    "notes_html": "<p>Confirm the launch date.</p>",
+    "notes_text": "Confirm the launch date.",
+    "summary": "- Launch confirmed for the 24th.",
+    "transcript": "You: Are we ready?\nAlex: Yes, the 24th.",
+    "speakers": ["You", "Alex"],
+    "recording": {
+      "started_at": "2026-10-12T09:00:00.000Z",
       "duration_ms": 1800000,
-      "end_time_estimated": true,
-      "recording_in_progress": false,
-      "sessions": [
-        {
-          "id": "recording-session-uuid",
-          "index": 1,
-          "started_at": "2026-10-10T09:00:00+00:00",
-          "ended_at": "2026-10-10T09:30:00+00:00",
-          "duration_ms": 1800000,
-          "streams": ["mic", "sys"]
-        }
+      "in_progress": false,
+      "takes": [
+        { "index": 1, "started_at": "2026-10-12T09:00:00.000Z", "duration_ms": 1800000 }
       ]
     }
   }
 }
 ```
 
-`body` preserves the editor's HTML (legacy notes may be plain text);
-`body_text` is its plain-text equivalent. `summary` is Markdown. The full
-`transcript` is one plain-text string, preserved verbatim with speaker labels
-and line breaks (for example, `Johannes: Hello\nFredrik: Hi`). JSON encodes
-line breaks as `\n`; decoding the JSON restores real line breaks. There is no
-duplicate structured `turns` array. `speakers` lists unique current labels in
-first-appearance order, including renamed speakers. Labels are names, not
-persistent person IDs.
+Fields may be added to schema version 1. Existing fields keep their meaning,
+so ignore any field you don't know. A change that breaks this contract gets a
+new `schema_version`.
 
-`created_at` and `updated_at` are the stored Unix timestamps in milliseconds;
-`sent_at` is the snapshot's delivery timestamp, including any unsaved edits.
-Empty language/provider values mean the note follows the global setting.
-Audio, local file paths, auth headers, and unrelated settings are never included.
+| Field | Meaning |
+|---|---|
+| `sent_at`, `created_at`, `updated_at` | RFC 3339 timestamps in UTC, with milliseconds. |
+| `id` | The note's stable id. Upsert on it. |
+| `language` | ISO 639-1 code of the note's language: the one set on the note, else Humla's default, with *Auto* resolved to what was detected. `null` when it is *Auto* and nothing was detected. |
+| `folder`, `client` | `{ id, name }` of the folder or client the note is filed under, or `null`. The id survives a rename. |
+| `notes_html` | What you typed in the note, as the editor's HTML. Older notes may hold plain text. |
+| `notes_text` | The same as plain text. |
+| `summary` | The summary as Markdown. Empty if none was made. |
+| `transcript` | The transcript as plain text, one turn per line, each starting with its speaker's label (`Alex: …`) once speakers are identified. |
+| `speakers` | Each label in `transcript` once, in order of first appearance, renamed speakers included. Labels are names, not person ids. |
+| `recording` | When the note was recorded (below), or `null` for a note that never was. |
 
-### Meeting timing
+Audio is never sent, and neither is any path to an audio file, your headers,
+or Humla's own settings.
 
-`note.meeting` describes persisted recording sessions. `started_at` is the
-earliest session start; `ended_at` is the latest estimated session end (start
-plus stored duration). These are RFC3339 timestamps. `duration_ms` sums the
-session durations, without gaps between separate recordings or double-counting
-microphone and system audio. It is not necessarily `ended_at - started_at`.
-Stored durations are best-effort capture/timeline lengths. End times are
-estimates, not independently recorded stop timestamps; pauses, missing trailing
-audio, and imported audio can differ from the real meeting's wall-clock bounds.
-For imports, the stored start is the import time, not the original event time.
+### Recording timing
 
-Unknown timing (including older recordings) is `null`, never guessed from note
-creation or modification times. If any session lacks a date/duration, the
-corresponding overall value is `null`; individual known sessions remain
-available. While recording, the overall end and duration stay `null` and
-`recording_in_progress` is true. The sessions array contains finalized sessions
-only; send again once processing finishes for complete timing.
+A note can be recorded in several takes. `recording.takes` lists them in
+order, each with when it started and how long it ran. `started_at` is the
+earliest start. `duration_ms` is the sum of the takes, without the gaps
+between them, so it is not `end − start`. Durations are measured on the
+recorded audio, so time spent paused isn't counted. A take's duration ends at
+its last transcribed speech, or at the end of its audio when it has no
+transcript yet.
 
-### Delivery diagnostics and HTTP 413
+A value that isn't known is `null`, never guessed from when the note was
+created. That covers takes from before Humla recorded their timing. If any
+take's start or duration is unknown, the matching total is `null` too, while
+the takes that are known keep their values. For imported audio, a take's start
+is when it was imported, not when the original meeting happened.
 
-HTTP 413 means the receiver or a proxy rejected the request as too large. Humla
-reports the exact serialized JSON byte count; it does not truncate the transcript
-or retry automatically. The transcript is included once, as plain text.
+While the note is being recorded (or audio is being imported into it), the take
+in progress isn't listed yet:
+`in_progress` is `true`, `duration_ms` is `null`, and `takes` holds only the
+finished ones.
 
-The most recent attempt is recorded in `diagnostics/webhook-last.json` inside
-the app's data directory. It contains the attempt time, payload byte count,
-successful HTTP status or sanitized error. It contains no webhook URL, auth
-headers, note content, or note identifier. Older builds did not retain these
-diagnostics, so they cannot recover a historical failed request.
+## When a send fails
+
+The error says what the receiver answered:
+
+- **401 or 403**: check the headers in Settings.
+- **413**: the note is larger than the receiver accepts. The message gives the
+  payload's size. Raise the receiver's request body limit. Humla never
+  truncates a note to fit.
+- **3xx**: redirects aren't followed. Put the final URL in Settings.
+- **Anything else**: check the receiver's logs.
+
+No message ever includes the URL or anything the receiver sent back, since
+either could carry a token or the meeting itself.

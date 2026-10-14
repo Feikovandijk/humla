@@ -24,8 +24,6 @@ export function mockTauri(
     if (cmd.startsWith("plugin:")) return undefined;
 
     switch (cmd) {
-      case "webhook_get_config":
-        return { enabled: false, url: "", headers: [] };
       case "settings_get": {
         const key = (args as { key?: string } | undefined)?.key;
         return key === "onboarding_completed" ? "true" : null;
@@ -73,6 +71,8 @@ export function mockTauri(
         };
       case "provider_key_get":
         return null;
+      case "webhook_get_endpoint":
+        return { url: "", headers: [] };
       case "anthropic_list_models":
       case "openai_list_models":
         return [];

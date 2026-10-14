@@ -68,13 +68,15 @@ export function ContextMenuItem({
   onClick,
   children,
   danger,
+  disabled,
 }: {
   onClick: () => void;
   children: React.ReactNode;
   danger?: boolean;
+  disabled?: boolean;
 }) {
   return (
-    <MenuItem danger={danger} onSelect={onClick} className="px-3 rounded-sm">
+    <MenuItem danger={danger} disabled={disabled} onSelect={onClick} className="px-3 rounded-sm">
       {children}
     </MenuItem>
   );

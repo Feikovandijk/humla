@@ -46,7 +46,6 @@ mod telemetry;
 mod title;
 mod transcription_config;
 mod webhook;
-pub use webhook::*;
 pub use api_keys::*;
 pub use assets::*;
 pub use chat::*;
@@ -66,6 +65,7 @@ pub use telemetry::*;
 pub use title::*;
 pub use summary_prompts::*;
 pub use transcription_config::*;
+pub use webhook::*;
 
 // Shared helpers that moved into submodules but are still called by the
 // recording / transcribe / summary code remaining in this root module.

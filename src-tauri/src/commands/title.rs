@@ -20,8 +20,8 @@
 //!   not be told one failed, and a local-only user with no LLM configured
 //!   would otherwise be toasted after every recording.
 
-use super::summary::{language_directive, resolve_auto, resolve_provider, summary_provider_id};
-use super::{DEFAULT_LANGUAGE, TITLE_FALLBACK_MODEL};
+use super::summary::{language_directive, note_language, resolve_provider, summary_provider_id};
+use super::TITLE_FALLBACK_MODEL;
 use crate::db::{self, NotePatch};
 use crate::menubar::is_replaceable_title;
 use crate::openai;
@@ -200,12 +200,7 @@ async fn try_generate_note_title(
             return Ok(None);
         }
         let p = resolve_provider(&conn, &n, api_key)?;
-        let global = db::get_setting(&conn, "language")?
-            .unwrap_or_else(|| DEFAULT_LANGUAGE.to_string());
-        // Same fallback rule as the summary: the note's language wins, empty
-        // means "follow the global default".
-        let lang = if n.language.trim().is_empty() { global } else { n.language.clone() };
-        (p, resolve_auto(&lang, &n), n)
+        (p, note_language(&conn, &n)?, n)
     };
     if crate::html_text::html_to_text(&note.body).trim().is_empty()
         && note.transcript.trim().is_empty()

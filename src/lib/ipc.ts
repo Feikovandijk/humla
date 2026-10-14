@@ -102,16 +102,21 @@ export type ExportSpec = {
   includeSpeakerLabels: boolean;
 };
 
-export type WebhookConfig = {
-  enabled: boolean;
+/** The webhook endpoint as Settings reads it (#213): the URL and each header's
+ *  name. Header values are write-only, like API keys. */
+export type WebhookEndpoint = {
   url: string;
-  headers: { name: string; value: string }[];
+  headers: string[];
 };
 
-export type WebhookDraft = Pick<Note, "title" | "body" | "transcript" | "summary" | "language" | "summary_preset" | "summary_provider">;
+/** The webhook endpoint as Settings saves it. A header whose `value` is null
+ *  keeps the value already stored under that name. */
+export type WebhookEndpointInput = {
+  url: string;
+  headers: { name: string; value: string | null }[];
+};
 
 export type SettingsKey =
-  | "webhook_enabled"
   | "language"
   | "default_summary_preset"
   | "diarize_model"
@@ -159,6 +164,10 @@ export type SettingsKey =
   // server process reads this key on every call, so the switch takes effect
   // without restarting the MCP client.
   | "mcp_enabled"
+  // Send to webhook (#213). Off until enabled; it decides whether a note's ⋯
+  // menu offers the send. The endpoint itself is a secret and lives in the
+  // Keychain (`webhookGetEndpoint`), never in this table.
+  | "webhook_enabled"
   | "silence_rms_threshold"
   // Menu-bar mode (#21). `close_to_tray` off means the close button still
   // quits; on, it hides the window and drops the Dock icon so a tray- or
@@ -385,10 +394,15 @@ export const ipc = {
     invoke<void>("notes_set_client", { id, clientId }),
 
   getSetting: (key: SettingsKey) => invoke<string | null>("settings_get", { key }),
-  webhookGetConfig: () => invoke<WebhookConfig>("webhook_get_config"),
-  webhookSetConfig: (config: WebhookConfig) => invoke<void>("webhook_set_config", { config }),
-  webhookSendNote: (noteId: string, draft?: WebhookDraft) =>
-    invoke<number>("webhook_send_note", { noteId, draft: draft ?? null }),
+  webhookGetEndpoint: () => invoke<WebhookEndpoint>("webhook_get_endpoint"),
+  webhookSetEndpoint: (endpoint: WebhookEndpointInput) =>
+    invoke<void>("webhook_set_endpoint", { endpoint }),
+  /** Where a send would go — host and non-default port only — for the
+   *  confirmation to name. Rejects when no endpoint is saved. */
+  webhookDestination: () => invoke<string>("webhook_destination"),
+  /** POST the note as it is in the database. Flush the view's queued edits
+   *  first (`flushEdits`), or the receiver gets an older copy. */
+  webhookSendNote: (noteId: string) => invoke<void>("webhook_send_note", { noteId }),
   setSetting: (key: SettingsKey, value: string) => invoke<void>("settings_set", { key, value }),
   /** Report one anonymous milestone. Fire-and-forget: the backend gates on the
    *  setting and on a once-per-install marker, so callers may call it freely and

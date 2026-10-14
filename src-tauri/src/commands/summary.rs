@@ -255,6 +255,20 @@ pub(super) fn resolve_auto(language: &str, note: &Note) -> String {
     }
 }
 
+/// The language a note's text is in, as far as Humla knows: the note's own
+/// language, the global default when the note follows it (empty), and `auto`
+/// resolved to what was detected ([`resolve_auto`]). Still `auto` when nothing
+/// was detected. The one rule the summary, the title and the webhook payload
+/// all read.
+pub(super) fn note_language(conn: &rusqlite::Connection, note: &Note) -> anyhow::Result<String> {
+    let lang = if note.language.trim().is_empty() {
+        db::get_setting(conn, "language")?.unwrap_or_else(|| DEFAULT_LANGUAGE.to_string())
+    } else {
+        note.language.clone()
+    };
+    Ok(resolve_auto(&lang, note))
+}
+
 async fn run_summary(app: AppHandle, note_id: String) -> anyhow::Result<()> {
     let state: State<AppState> = app.state();
     // Which provider first, then that provider's key: reading every slot would
@@ -274,16 +288,7 @@ async fn run_summary(app: AppHandle, note_id: String) -> anyhow::Result<()> {
         let conn = state.db.lock();
         let n = db::get_note(&conn, &note_id)?;
         let p_resolved = resolve_provider(&conn, &n, api_key)?;
-        let global_lang = db::get_setting(&conn, "language")?
-            .unwrap_or_else(|| DEFAULT_LANGUAGE.to_string());
-        // Same fallback rule as transcription: note language wins, empty
-        // means "follow the global default".
-        let lang = if n.language.trim().is_empty() {
-            global_lang
-        } else {
-            n.language.clone()
-        };
-        (p_resolved, resolve_auto(&lang, &n), n)
+        (p_resolved, note_language(&conn, &n)?, n)
     };
     if note.transcript.trim().is_empty() && note.body.trim().is_empty() {
         return Ok(());
@@ -597,6 +602,20 @@ mod tests {
         db::set_detected_language(&conn, &note.id, "en").unwrap();
         let note = db::get_note(&conn, &note.id).unwrap();
         assert_eq!(resolve_auto("no", &note), "no");
+    }
+
+    #[test]
+    fn a_note_with_no_language_follows_the_global_default() {
+        let (_dir, conn) = temp_conn();
+        let note = db::create_note(&conn, "", "meeting", "").unwrap();
+        assert_eq!(note_language(&conn, &note).unwrap(), DEFAULT_LANGUAGE);
+        db::set_setting(&conn, "language", "auto").unwrap();
+        db::set_detected_language(&conn, &note.id, "sv").unwrap();
+        let note = db::get_note(&conn, &note.id).unwrap();
+        // A global `auto` resolves through the note's detection like a note's own.
+        assert_eq!(note_language(&conn, &note).unwrap(), "sv");
+        let english = db::create_note(&conn, "en", "meeting", "").unwrap();
+        assert_eq!(note_language(&conn, &english).unwrap(), "en");
     }
 
     #[test]
