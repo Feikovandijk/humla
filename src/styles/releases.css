@@ -94,3 +94,11 @@
 .home-offer-done { display: flex; align-items: center; gap: 10px; }
 .home-offer-done p { flex: 1; margin-top: 0; }
 @media (prefers-contrast: more) { .home-offer { border: 1px solid var(--color-line-visible); box-shadow: none; } }
+
+.release-preview-more { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--control-radius); background: var(--color-surface-2); color: var(--color-icon); }
+.release-preview-webhook { position: relative; }
+.release-preview-webhook .release-preview-menu { top: 4px; right: -8px; width: 176px; }
+.release-preview-webhook .release-preview-menu > div:first-child { color: inherit; }
+.release-preview-webhook .release-preview-menu > .is-active { background: var(--color-surface-2); }
+.release-preview-sent { display: inline-flex; align-items: center; gap: 7px; margin-top: 4px; padding: 7px 12px; border-radius: 999px; font-size: 12px; color: var(--color-text); background: var(--color-surface-2); }
+.release-preview-sent svg { color: var(--color-success); }

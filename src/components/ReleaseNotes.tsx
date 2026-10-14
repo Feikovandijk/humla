@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { ArrowUpRight, Check, ChevronDown, CircleCheck, CircleDot, Building2, Folder, Languages, Lock, Tag, Users, X } from "lucide-react";
+import { ArrowUpRight, Check, ChevronDown, CircleCheck, CircleDot, Building2, Folder, Languages, Lock, MoreHorizontal, Tag, Users, X } from "lucide-react";
 import { isTauri } from "@tauri-apps/api/core";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { latestReleases, type Release } from "../content/releases";
@@ -45,6 +45,7 @@ const VISUAL_CAPTION: Record<NonNullable<Release["visual"]>, string> = {
   privacy: "Choose who can see your note.",
   activity: "Follow the recording from your library.",
   speakers: "See who said what, even on Auto.",
+  webhook: "Send a meeting to your own tools.",
 };
 
 function ReleaseVisual({ kind }: { kind: NonNullable<Release["visual"]> }) {
@@ -84,6 +85,18 @@ function ReleaseVisual({ kind }: { kind: NonNullable<Release["visual"]> }) {
         {kind === "activity" && <>
           <div className="release-demo-heading"><span>All notes</span><small>8 notes</small></div>
           <PreviewNote recording />
+        </>}
+        {kind === "webhook" && <>
+          <div className="release-demo-heading"><span>Weekly planning</span><span className="release-preview-more"><MoreHorizontal size={16} strokeWidth={1.7} /></span></div>
+          <div className="release-preview-webhook">
+            <p className="release-preview-body">Launch confirmed for the 24th. Alex owns the checklist.</p>
+            <div className="release-preview-menu">
+              <div className={rowClass}>Export…</div>
+              <div className={`${rowClass} is-active`}>Send to webhook…</div>
+              <div className={rowClass}>Regenerate title</div>
+            </div>
+          </div>
+          <div className="release-preview-sent"><CircleCheck size={14} strokeWidth={1.8} />Sent to hooks.example.com</div>
         </>}
         {kind === "speakers" && <>
           <div className="release-demo-heading"><span>Product catch-up</span><small>{speakerCountLabel(PREVIEW_TURNS.length)}</small></div>

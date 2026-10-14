@@ -3,13 +3,37 @@ export type Release = {
   date: string;
   title: string;
   summary: string;
-  visual?: "filters" | "privacy" | "activity" | "updates" | "speakers";
+  visual?: "filters" | "privacy" | "activity" | "updates" | "speakers" | "webhook";
   paragraphs: string[];
   highlights: string[];
   issues: { title: string; reference: string; status: "Open" | "Closed"; url: string }[];
 };
 
 export const releases: Release[] = [
+  {
+    version: "0.67.0",
+    date: "2026-10-14",
+    title: "Better auto-titles and webhook support",
+    summary: "Titles that name the actual meeting, and a way to send a note to your own tools.",
+    visual: "webhook",
+    paragraphs: [
+      "Humla now names a meeting after what most of it was about. Titles used to come from the first few minutes, and that’s usually small talk. Now Humla reads a sample from across the whole transcript, plus the summary when there is one. Regenerate title in a note’s ⋯ menu works the same way, and it’s greyed out until there’s something to read.",
+      "You can now send a note to your own webhook, so a knowledge base, an agent or an automation like n8n or Zapier gets the meeting. Turn it on under Settings → General → Integrations, add the URL and any headers it needs, then choose Send to webhook… in a note’s ⋯ menu. Humla asks before every send and never sends anything on its own.",
+      "The URL and headers stay in your Mac’s Keychain and aren’t synced. Each send is the whole note as JSON: your notes, the summary, the transcript with speaker names, and when it was recorded. Audio is never sent.",
+      "Thanks to @jgontrum and @gYonder, whose pull requests started both of these.",
+    ],
+    highlights: [
+      "Auto-titles read the whole meeting, not just its first minutes.",
+      "Titles also use the summary when there is one.",
+      "Send any note to your own webhook from the ⋯ menu.",
+      "The webhook URL and headers stay in your Keychain.",
+      "Audio is never sent to the webhook.",
+    ],
+    issues: [
+      { title: "Generate note titles from the note's first paragraphs", reference: "#90", status: "Closed", url: "https://github.com/michaelwilhelmsen/humla/issues/90" },
+      { title: "Add opt-in note delivery via webhooks", reference: "#213", status: "Closed", url: "https://github.com/michaelwilhelmsen/humla/issues/213" },
+    ],
+  },
   {
     version: "0.66.0",
     date: "2026-10-06",
