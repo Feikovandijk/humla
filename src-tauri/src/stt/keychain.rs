@@ -1,19 +1,8 @@
-//! Per-provider Keychain access, one slot per cloud provider as named in
-//! `providers::REGISTRY`. Cache lives on AppState as a HashMap so each
-//! provider's first read triggers exactly one Keychain prompt.
+//! Which Keychain account holds each provider's API key, as named in
+//! `providers::REGISTRY`. The service, the reads and the cache in front of
+//! them are `crate::keychain`'s.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use parking_lot::Mutex;
 use crate::providers::ProviderId;
-
-pub const KEYCHAIN_SERVICE: &str = "no.humla.app";
-
-pub type ApiKeyCache = Arc<Mutex<HashMap<&'static str, Option<String>>>>;
-
-pub fn new_cache() -> ApiKeyCache {
-    Arc::new(Mutex::new(HashMap::new()))
-}
 
 /// Keychain account for a provider id, `None` for one that takes no key
 /// (local Whisper) and for an id the registry doesn't know.

@@ -1,5 +1,6 @@
 mod db;
 mod html_text;
+mod keychain;
 mod openai;
 mod anthropic;
 mod local_whisper;
@@ -35,13 +36,12 @@ pub struct AppState {
     // mean each chunk's initial_prompt sees the *committed* output of every
     // prior chunk in this session.
     pub transcribe_gate: Arc<tokio::sync::Mutex<()>>,
-    // Per-provider Keychain cache, keyed by provider_id ("openai",
-    // "deepgram", "groq"). Each provider's first read triggers exactly
-    // one OS-level Keychain prompt; subsequent reads return from this
-    // map. Populated lazily by `read_provider_api_key` and updated by
-    // `set_provider_api_key` so settings UI writes take effect
-    // immediately.
-    pub api_key_cache: stt::ApiKeyCache,
+    // Keychain cache, keyed by account ("openai_api_key", "webhook_config",
+    // …). Each account's first read triggers exactly one OS-level Keychain
+    // prompt; subsequent reads return from this map. Populated lazily by
+    // `keychain::read` and updated by `keychain::write`, so a Settings write
+    // takes effect immediately.
+    pub keychain_cache: keychain::Cache,
     /// Notified after each successful local write. `NoopSync` in the
     /// open-source build; a commercial build installs an observer that
     /// enqueues the change for upload.
@@ -201,7 +201,7 @@ where
                 recording: Arc::new(Mutex::new(recording::LiveCapture::default())),
                 whisper: local_whisper::new_shared(),
                 transcribe_gate: Arc::new(tokio::sync::Mutex::new(())),
-                api_key_cache: stt::new_cache(),
+                keychain_cache: keychain::new_cache(),
                 sync,
                 manifest_lock: Arc::new(tokio::sync::Mutex::new(())),
                 unify_locks: Arc::new(Mutex::new(std::collections::HashMap::new())),

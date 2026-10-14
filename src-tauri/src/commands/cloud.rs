@@ -192,7 +192,7 @@ pub(crate) fn current_user_id() -> String {
 // ---- credentials (Keychain) ------------------------------------------------
 
 fn cred_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(crate::stt::KEYCHAIN_SERVICE, CRED_ACCOUNT).map_err(|e| e.to_string())
+    crate::keychain::entry(CRED_ACCOUNT)
 }
 
 pub(crate) fn read_creds() -> Option<(String, String)> {

@@ -18,9 +18,7 @@ pub use config::{
     from_legacy_settings, DeepgramConfig, GroqConfig, LocalWhisperConfig, OpenAiConfig,
     ProviderConfig, TranscribeConfig,
 };
-pub use keychain::{
-    keychain_account_for, new_cache, requires_api_key, ApiKeyCache, KEYCHAIN_SERVICE,
-};
+pub use keychain::{keychain_account_for, requires_api_key};
 pub use deepgram::DeepgramAdapter;
 pub use groq::GroqAdapter;
 pub use local::LocalWhisperAdapter;
