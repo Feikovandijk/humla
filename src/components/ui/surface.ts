@@ -11,7 +11,7 @@ const surfaceClass =
 
 /** A row inside a floating surface: menu item, option, radio item. */
 export const rowClass =
-  "flex w-full items-center gap-2 px-2.5 py-1.5 rounded-md text-sm text-left transition-colors cursor-default select-none outline-none";
+  "flex w-full items-center gap-2 px-2.5 py-1.5 rounded-md text-sm text-left transition-colors cursor-default select-none outline-none data-[disabled]:opacity-50";
 
 /**
  * Highlight for the row Radix considers active — hover and keyboard focus are

@@ -2,9 +2,12 @@
 //!
 //! A Note whose Title Humla owns — empty, a `Recording 19 Aug 14:32`
 //! timestamp, or the `Imported audio` import fallback — gets a short phrase
-//! derived from the head of its own content once that content settles. The
-//! model call is deliberately small and cheap: the first paragraphs of the
-//! notes and the transcript, four to six words back, no streaming.
+//! derived from its own content once that content settles. The model call is
+//! deliberately small and cheap: the head of the typed notes, excerpts from
+//! across the transcript, and the summary when the Note has one — four to six
+//! words back, no streaming. Every trigger (the post-stop chain, a deferred
+//! transcription finishing, the body-settled checkpoint and ⋯ → Regenerate
+//! title) reads the Note through the same [`title_input`].
 //!
 //! Three things this is *not*, all of them settled during the issue's
 //! grilling:
@@ -12,10 +15,11 @@
 //! - **Not driven by the summary.** Summarising in Humla is a button the user
 //!   presses, so a summary-completion trigger would leave the motivating case
 //!   — a menu-bar recorder who never opens the note — on its timestamp
-//!   forever.
-//! - **Not live.** The input is the same opening paragraphs whether we ask
-//!   during the recording or after it, so firing early buys nothing and
-//!   spends GPU exactly when local Whisper needs it.
+//!   forever. A summary that already exists is read, though: it is the best
+//!   distillation of the Note there is.
+//! - **Not live.** The transcript is sampled across its whole length, so a
+//!   title taken mid-recording would describe part of a meeting — and spend
+//!   GPU exactly when local Whisper needs it. After stop is the cheap moment.
 //! - **Not loud.** Failure is silent. A user who never asked for a Title must
 //!   not be told one failed, and a local-only user with no LLM configured
 //!   would otherwise be toasted after every recording.
@@ -38,10 +42,28 @@ const TITLE_MAX_CHARS: usize = 60;
 /// Title than the timestamp it would replace, so we reject instead.
 const TITLE_JUNK_CHARS: usize = 2 * TITLE_MAX_CHARS;
 
-/// How much of each content block the model sees. A title comes from the head
-/// of a note — the agenda, the first exchange — and sending the whole
-/// transcript would cost real tokens for no better answer.
-const BLOCK_CHAR_BUDGET: usize = 750;
+/// How much of the typed notes the model sees: their head, which is where an
+/// agenda sits.
+const NOTES_CHAR_BUDGET: usize = 750;
+
+/// How much of the transcript the model sees. The head alone is the wrong
+/// part — a meeting opens on the weather — so a longer transcript is sampled
+/// across its whole length instead (see [`sample_transcript`]). Around 800
+/// tokens: noise beside a summary call, and room for every window to hold a
+/// few whole exchanges.
+const TRANSCRIPT_CHAR_BUDGET: usize = 3_000;
+
+/// How many windows a transcript over budget is cut into. More windows reach
+/// more of the meeting; fewer keep each one long enough to follow.
+const TRANSCRIPT_WINDOWS: usize = 6;
+
+/// What stands between two transcript windows, and what the prompt tells the
+/// model it means: speech was skipped here.
+const SKIP_MARK: &str = "\n…\n";
+
+/// How much of an existing summary the model sees. Its opening is the
+/// overview, which is all a title needs.
+const SUMMARY_CHAR_BUDGET: usize = 1_500;
 
 /// Turn raw model output into a Title, or `None` when there is nothing usable
 /// in it.
@@ -119,7 +141,7 @@ fn truncate_chars(t: &str, max: usize) -> String {
     }
     let cut = t.char_indices().nth(max).map(|(i, _)| i).unwrap_or(t.len());
     let head = &t[..cut];
-    match head.rfind(' ') {
+    match head.rfind(char::is_whitespace) {
         // Only when the word boundary keeps most of the budget — otherwise a
         // long final word would throw away half the title.
         Some(i) if i >= max / 2 => head[..i].trim_end().to_string(),
@@ -127,35 +149,91 @@ fn truncate_chars(t: &str, max: usize) -> String {
     }
 }
 
-/// The two labelled blocks the model reads, capped at the head of each.
+/// The labelled blocks the model reads: the head of the notes, a sample of the
+/// transcript, and the head of the summary when there is one.
 ///
 /// Reuses the summary path's `[Notater]` / `[Transkripsjon]` convention
 /// including its `(ingen)` placeholder: both blocks are always sent, so a
 /// typed-only, a recorded-only and a mixed Note all take one path with no
 /// precedence rule — and a thinking model isn't left wondering whether a
-/// missing block is absent or hidden.
-pub(crate) fn title_input(body_text: &str, transcript: &str) -> String {
-    let notes = head_chars(body_text, BLOCK_CHAR_BUDGET);
-    let spoken = head_chars(transcript, BLOCK_CHAR_BUDGET);
+/// missing block is absent or hidden. `[Sammendrag]` is the exception and is
+/// sent only when it has content: most Notes are titled before anyone
+/// summarises them, and an `(ingen)` in nearly every call would be noise.
+pub(crate) fn title_input(body_text: &str, transcript: &str, summary: &str) -> String {
+    let notes = head_chars(body_text, NOTES_CHAR_BUDGET);
+    let spoken = sample_transcript(transcript);
     let notes_block = if notes.is_empty() { "(ingen)".to_string() } else { notes };
     let transcript_block = if spoken.is_empty() { "(ingen)".to_string() } else { spoken };
-    format!("[Notater]\n{notes_block}\n\n[Transkripsjon]\n{transcript_block}")
+    let mut input = format!("[Notater]\n{notes_block}\n\n[Transkripsjon]\n{transcript_block}");
+    let summary = truncate_chars(summary.trim(), SUMMARY_CHAR_BUDGET);
+    if !summary.is_empty() {
+        input.push_str(&format!("\n\n[Sammendrag]\n{summary}"));
+    }
+    input
+}
+
+/// The transcript as the model sees it: whole when it fits the budget,
+/// otherwise [`TRANSCRIPT_WINDOWS`] excerpts, one from the middle of each equal
+/// stretch of it, joined by [`SKIP_MARK`].
+///
+/// Even spacing is what makes the sample represent the meeting: whatever took
+/// most of the time turns up in most of the windows, and the opening small
+/// talk and the closing goodbyes get at most a window's share between them,
+/// whatever the meeting's length. A window never reaches past its own stretch,
+/// so two never overlap and every mark stands for speech that really was
+/// skipped.
+fn sample_transcript(text: &str) -> String {
+    let t = text.trim();
+    let total = t.chars().count();
+    if total <= TRANSCRIPT_CHAR_BUDGET {
+        return t.to_string();
+    }
+    let marks = (TRANSCRIPT_WINDOWS - 1) * SKIP_MARK.chars().count();
+    let window = (TRANSCRIPT_CHAR_BUDGET - marks) / TRANSCRIPT_WINDOWS;
+    let stretch = total / TRANSCRIPT_WINDOWS;
+    (0..TRANSCRIPT_WINDOWS)
+        .map(|i| excerpt(t, i * stretch + (stretch - window) / 2, window))
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(SKIP_MARK)
+}
+
+/// At most `len` chars of `t` from char `start`, nudged inward onto word
+/// boundaries so an excerpt neither opens nor ends on half a word. Inward only:
+/// the excerpt stays inside `[start, start + len)`.
+fn excerpt(t: &str, start: usize, len: usize) -> String {
+    let from = byte_at(t, start);
+    let rest = &t[from..];
+    let mid_word = t[..from].chars().next_back().is_some_and(|c| !c.is_whitespace())
+        && rest.chars().next().is_some_and(|c| !c.is_whitespace());
+    let (rest, skipped) = match rest.char_indices().take(len / 2).find(|(_, c)| c.is_whitespace()) {
+        Some((i, _)) if mid_word => (&rest[i..], rest[..i].chars().count()),
+        _ => (rest, 0),
+    };
+    truncate_chars(rest.trim_start(), len - skipped)
+}
+
+/// Byte offset of char `n` in `t`, or its length when `t` is shorter.
+fn byte_at(t: &str, n: usize) -> usize {
+    t.char_indices().nth(n).map_or(t.len(), |(i, _)| i)
 }
 
 /// First `budget` chars of `text`, trimmed, cut on a `char` boundary.
 fn head_chars(text: &str, budget: usize) -> String {
     let t = text.trim();
-    let cut = t.char_indices().nth(budget).map(|(i, _)| i).unwrap_or(t.len());
-    t[..cut].trim_end().to_string()
+    t[..byte_at(t, budget)].trim_end().to_string()
 }
 
 /// The system prompt. Minimal on purpose — a constraint-heavy prompt becomes a
-/// checklist a small thinking model re-litigates instead of following.
+/// checklist a small thinking model re-litigates instead of following. The one
+/// sentence beyond the format is the one the transcript sample needs: what the
+/// marks between excerpts are, and that the small talk is not the subject.
 fn title_prompt(language: &str) -> String {
     format!(
         "Give the note below a short title naming what it is about. \
          Four to six words. Answer with the title alone — no quotes, no label, \
-         no final period, no explanation.\n\n{}",
+         no final period, no explanation. Name what most of it is about, not \
+         the small talk around it; … marks skipped speech.\n\n{}",
         language_directive(language)
     )
 }
@@ -209,7 +287,13 @@ async fn try_generate_note_title(
     };
     if crate::html_text::html_to_text(&note.body).trim().is_empty()
         && note.transcript.trim().is_empty()
+        && note.summary.trim().is_empty()
     {
+        // Regenerate is owed the real reason. `None` would reach it as "the
+        // model gave back nothing usable" about a model that was never asked.
+        if force {
+            anyhow::bail!("This note has nothing to title yet. Type some notes or record first.");
+        }
         return Ok(None);
     }
     // Thinking on a five-word title is waste, whatever the user set for
@@ -244,7 +328,11 @@ async fn write_generated_title(
     // No streaming into the summary panel: this call is not a summary and must
     // not touch its UI.
     let raw = provider
-        .complete(&title_prompt(language), &title_input(&body_text, &note.transcript), |_| {})
+        .complete(
+            &title_prompt(language),
+            &title_input(&body_text, &note.transcript, &note.summary),
+            |_| {},
+        )
         .await?;
     let Some(title) = clean_title(&raw) else {
         eprintln!("[title] note {note_id}: model returned nothing usable, keeping the title");
@@ -402,31 +490,44 @@ mod tests {
     fn both_blocks_are_always_sent() {
         // A typed-only note and a recorded-only note take the same path — the
         // empty side says "(ingen)" rather than going missing.
-        let typed = title_input("agenda: launch", "");
+        let typed = title_input("agenda: launch", "", "");
         assert!(typed.contains("[Notater]\nagenda: launch"), "{typed}");
         assert!(typed.contains("[Transkripsjon]\n(ingen)"), "{typed}");
 
-        let recorded = title_input("", "Hege: hei");
+        let recorded = title_input("", "Hege: hei", "");
         assert!(recorded.contains("[Notater]\n(ingen)"), "{recorded}");
         assert!(recorded.contains("[Transkripsjon]\nHege: hei"), "{recorded}");
     }
 
     #[test]
+    fn the_summary_is_sent_only_when_there_is_one() {
+        assert!(!title_input("agenda", "Hege: hei", "").contains("[Sammendrag]"));
+        assert!(!title_input("agenda", "Hege: hei", "  \n ").contains("[Sammendrag]"));
+        let summarised = title_input("agenda", "Hege: hei", "Launch moved to Friday.");
+        assert!(
+            summarised.ends_with("[Sammendrag]\nLaunch moved to Friday."),
+            "{summarised}"
+        );
+    }
+
+    #[test]
     fn each_block_is_capped_at_its_own_budget() {
-        let long = "a ".repeat(2000);
-        let input = title_input(&long, &long);
-        // Two capped blocks plus the labels — nowhere near the raw input.
-        assert!(input.len() < 4 * BLOCK_CHAR_BUDGET, "{}", input.len());
+        let long = "a ".repeat(20_000);
+        let input = title_input(&long, &long, &long);
+        let budget = NOTES_CHAR_BUDGET + TRANSCRIPT_CHAR_BUDGET + SUMMARY_CHAR_BUDGET;
+        // Three capped blocks plus their labels — nowhere near the raw input.
+        assert!(input.chars().count() < budget + 100, "{}", input.chars().count());
         assert!(input.contains("[Notater]"));
         assert!(input.contains("[Transkripsjon]"));
+        assert!(input.contains("[Sammendrag]"));
     }
 
     #[test]
     fn a_cap_on_a_block_never_splits_a_multibyte_character() {
-        let wide = "æ".repeat(BLOCK_CHAR_BUDGET + 40);
-        let input = title_input(&wide, "");
+        let wide = "æ".repeat(NOTES_CHAR_BUDGET + 40);
+        let input = title_input(&wide, "", "");
         // Would have panicked on a byte-index slice.
-        assert!(input.contains(&"æ".repeat(BLOCK_CHAR_BUDGET)));
+        assert!(input.contains(&"æ".repeat(NOTES_CHAR_BUDGET)));
     }
 
     #[test]
@@ -435,5 +536,98 @@ mod tests {
         assert!(title_prompt("en").contains("English"));
         // On `auto` the only cue is the transcript block — same rule as #167.
         assert!(title_prompt("auto").contains("transcript"));
+    }
+
+    #[test]
+    fn the_prompt_explains_the_mark_it_samples_with() {
+        let mark = SKIP_MARK.trim();
+        assert!(title_prompt("en").contains(&format!("{mark} marks skipped speech")));
+    }
+
+    /// A meeting of `minutes` at roughly speaking pace: small talk, then one
+    /// topic, then goodbyes, each in its own words so a test can see which
+    /// parts a sample reached.
+    fn meeting(minutes: usize) -> String {
+        let chars = minutes * 800;
+        let fill = |line: &str, n: usize| line.repeat(n / line.len() + 1);
+        format!(
+            "{}{}{}",
+            fill("You: fint vær i dag, hvordan var helgen? ", 1_200),
+            fill("Hege: ORION-lanseringen utsettes til fredag, jeg eier blokkerne. ", chars),
+            fill("You: takk for i dag, ha det bra! ", 1_200),
+        )
+    }
+
+    #[test]
+    fn a_transcript_within_budget_is_sent_whole() {
+        let short = "You: hei Hege.\nHege: hei, hvordan går det?";
+        assert_eq!(sample_transcript(short), short);
+        assert_eq!(sample_transcript(""), "");
+        let exact = "a".repeat(TRANSCRIPT_CHAR_BUDGET);
+        assert_eq!(sample_transcript(&exact), exact);
+    }
+
+    #[test]
+    fn a_long_meeting_is_sampled_mostly_from_its_substance() {
+        // The failure #90 kept producing: a head-only input titled the weather.
+        for minutes in [10, 60, 180] {
+            let sampled = sample_transcript(&meeting(minutes));
+            let windows: Vec<&str> = sampled.split(SKIP_MARK).collect();
+            assert_eq!(windows.len(), TRANSCRIPT_WINDOWS, "{minutes} min: {sampled}");
+            let on_topic = windows.iter().filter(|w| w.contains("ORION")).count();
+            assert!(on_topic >= TRANSCRIPT_WINDOWS - 2, "{minutes} min: {sampled}");
+        }
+    }
+
+    #[test]
+    fn a_sample_never_exceeds_the_budget() {
+        for len in [TRANSCRIPT_CHAR_BUDGET + 1, TRANSCRIPT_CHAR_BUDGET + 7, 9_999, 250_000] {
+            let text = "ord og ".repeat(len / 7 + 1);
+            let sampled = sample_transcript(&text[..len]);
+            assert!(sampled.chars().count() <= TRANSCRIPT_CHAR_BUDGET, "{len}");
+        }
+    }
+
+    #[test]
+    fn windows_just_over_the_budget_do_not_overlap() {
+        // Numbered words make any duplicate visible: a word that turns up in two
+        // windows means a mark claimed a skip that never happened.
+        let words: Vec<String> = (0..700).map(|i| format!("w{i}")).collect();
+        let text = words.join(" ");
+        assert!(text.chars().count() > TRANSCRIPT_CHAR_BUDGET);
+        let sampled = sample_transcript(&text);
+        let mut seen = std::collections::HashSet::new();
+        for word in sampled.split_whitespace().filter(|w| *w != "…") {
+            assert!(seen.insert(word), "{word} sampled twice: {sampled}");
+        }
+    }
+
+    #[test]
+    fn an_excerpt_never_opens_or_ends_on_half_a_word() {
+        let words: Vec<String> = (0..5_000).map(|i| format!("ord{i}")).collect();
+        let text = words.join(" ");
+        let whole: std::collections::HashSet<&str> = text.split(' ').collect();
+        let sampled = sample_transcript(&text);
+        for word in sampled.split_whitespace().filter(|w| *w != "…") {
+            assert!(whole.contains(word), "{word} is half a word: {sampled}");
+        }
+    }
+
+    #[test]
+    fn an_excerpt_keeps_a_word_it_starts_on() {
+        // Already on a boundary — after a space or a newline — is not mid-word,
+        // so the first word must survive.
+        assert_eq!(excerpt("aaa ORION bbb", 4, 9), "ORION bbb");
+        assert_eq!(excerpt("aaa\nORION bbb", 4, 9), "ORION bbb");
+        assert_eq!(excerpt("aaa ORION bbb", 5, 10), "bbb");
+    }
+
+    #[test]
+    fn a_sample_never_splits_a_multibyte_character() {
+        let wide = "æøå ".repeat(5_000);
+        let sampled = sample_transcript(&wide);
+        // Would have panicked on a byte-index slice.
+        assert!(sampled.contains("æøå"));
+        assert!(sampled.chars().count() <= TRANSCRIPT_CHAR_BUDGET);
     }
 }

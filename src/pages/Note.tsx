@@ -1882,6 +1882,17 @@ export function NoteToolbar({
   const navigate = useNavigate();
   const removeLocal = useNotesStore((s) => s.removeLocal);
   const note = useNotesStore((s) => s.notes.find((n) => n.id === noteId));
+  const isTitling = useRecordingStore((s) => !!s.titling[noteId]);
+  // Regenerate title reads the notes, the transcript and the summary, so it is
+  // offered once any of them has something to read — and not while a capture
+  // or a deferred transcription is still changing the transcript, or while a
+  // title is already being written.
+  const hasTitleSource =
+    !!note &&
+    (htmlToText(note.body).trim() !== "" ||
+      note.transcript.trim() !== "" ||
+      note.summary.trim() !== "");
+  const canRegenerateTitle = hasTitleSource && !isTitling && !recActive && !isTranscribing;
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   // The export sheet's team hint opens this. Deliberately NOT the same instance
@@ -2042,6 +2053,7 @@ export function NoteToolbar({
             </ContextMenuItem>
           )}
           <ContextMenuItem
+            disabled={!canRegenerateTitle}
             onClick={() => {
               setMenuPos(null);
               onRegenerateTitle();
