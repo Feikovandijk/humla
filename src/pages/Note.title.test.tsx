@@ -74,7 +74,7 @@ describe("a title generated while its note is open", () => {
 
 describe("⋯ → Regenerate title", () => {
   it("replaces a title the user typed, because they asked", async () => {
-    const note = makeNote({ id: "n1", title: "Mine" });
+    const note = makeNote({ id: "n1", title: "Mine", transcript: "Hege: launch plan" });
     const generate = vi.fn(() => "Kickoff with Hege");
     open(note, { note_generate_title: generate });
 
@@ -88,7 +88,7 @@ describe("⋯ → Regenerate title", () => {
   });
 
   it("leaves the title alone, and says so, when the model gives back nothing", async () => {
-    const note = makeNote({ id: "n1", title: TIMESTAMP });
+    const note = makeNote({ id: "n1", title: TIMESTAMP, transcript: "Hege: launch plan" });
     open(note, { note_generate_title: () => null });
 
     await waitFor(() => expect(titleBox()).toHaveValue(TIMESTAMP));
@@ -100,6 +100,48 @@ describe("⋯ → Regenerate title", () => {
     expect(await screen.findByText("Couldn’t write a title")).toBeInTheDocument();
     expect(screen.getByText(/nothing usable, so the title is unchanged/i)).toBeInTheDocument();
     expect(titleBox()).toHaveValue(TIMESTAMP);
+  });
+  it("is offered for a typed note with no recording, and for one with only a summary", async () => {
+    for (const content of [{ body: "<p>agenda: launch</p>" }, { summary: "Launch moved." }]) {
+      const note = makeNote({ id: "n1", title: TIMESTAMP, ...content });
+      const { unmount } = renderApp("/note/n1", {
+        notes_list: () => [note],
+        notes_get: () => note,
+        note_timeline: () => [],
+      });
+      await waitFor(() => expect(titleBox()).toHaveValue(TIMESTAMP));
+      await userEvent.click(screen.getByRole("button", { name: /more/i }));
+      const item = await screen.findByRole("menuitem", { name: "Regenerate title" });
+      expect(item).not.toHaveAttribute("data-disabled");
+      unmount();
+    }
+  });
+
+  it("is not offered on a note with nothing to title yet", async () => {
+    const note = makeNote({ id: "n1", title: TIMESTAMP });
+    const generate = vi.fn(() => "Kickoff with Hege");
+    open(note, { note_generate_title: generate });
+
+    await waitFor(() => expect(titleBox()).toHaveValue(TIMESTAMP));
+    await userEvent.click(screen.getByRole("button", { name: /more/i }));
+    const item = await screen.findByRole("menuitem", { name: "Regenerate title" });
+    // The menu keeps its place in the list, so the action is still findable —
+    // it just can't fire into a note the model would have nothing to read in.
+    expect(item).toHaveAttribute("data-disabled");
+    await userEvent.click(item);
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it("is not offered while a title is already being written", async () => {
+    const note = makeNote({ id: "n1", title: TIMESTAMP, transcript: "Hege: launch plan" });
+    open(note);
+    await waitFor(() => expect(titleBox()).toHaveValue(TIMESTAMP));
+
+    act(() => useRecordingStore.getState().setTitling("n1", true));
+    await userEvent.click(screen.getByRole("button", { name: /more/i }));
+
+    const item = await screen.findByRole("menuitem", { name: "Regenerate title" });
+    expect(item).toHaveAttribute("data-disabled");
   });
 });
 
