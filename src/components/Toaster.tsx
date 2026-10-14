@@ -1,5 +1,15 @@
 import { useNavigate } from "react-router-dom";
-import { useRecordingStore } from "../lib/store";
+import { useRecordingStore, type ErrorKind } from "../lib/store";
+
+// One heading per kind, so a failure says which action failed. An export used
+// to arrive under "Recording issue", the heading for errors with no kind.
+const HEADING: Record<ErrorKind, string> = {
+  recording: "Recording issue",
+  summary: "Summary failed",
+  title: "Couldn’t write a title",
+  export: "Export failed",
+  webhook: "Couldn’t send to webhook",
+};
 
 export function Toaster() {
   const errors = useRecordingStore((s) => s.errors);
@@ -33,13 +43,7 @@ export function Toaster() {
                   : "font-medium text-red-600 dark:text-red-400 mb-1"
               }
             >
-              {isNotice
-                ? "Speakers merged"
-                : e.kind === "summary"
-                  ? "Summary failed"
-                  : e.kind === "title"
-                    ? "Couldn’t write a title"
-                    : "Recording issue"}
+              {isNotice ? "Speakers merged" : HEADING[e.kind ?? "recording"]}
             </div>
             <div className="text-[var(--color-text)]">{e.message}</div>
             {/* Copy-coupled: error messages that mention "permission" or

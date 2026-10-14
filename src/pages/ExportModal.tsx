@@ -179,7 +179,7 @@ export function ExportModal({
       });
       onClose();
     } catch (e) {
-      pushError({ noteId: note.id, message: `Export failed: ${String(e)}` });
+      pushError({ noteId: note.id, message: String(e), kind: "export" });
     } finally {
       setBusy(false);
     }
