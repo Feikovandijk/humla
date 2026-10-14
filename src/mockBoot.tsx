@@ -379,6 +379,7 @@ function toolbarCase(
         onTogglePanel={() => {}}
         onSummarizeFailed={() => {}}
         onRegenerateTitle={() => {}}
+        flushEdits={async () => {}}
         pendingTranscription={pending}
         isTranscribing={false}
         sidebarCollapsed={sidebarCollapsed}

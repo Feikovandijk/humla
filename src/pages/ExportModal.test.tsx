@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { mockTauri } from "../test/tauri";
 import { ExportModal } from "./ExportModal";
 import { DISCONNECTED, useCloudStore, type CloudWorkspace } from "../lib/cloud";
+import { useRecordingStore } from "../lib/store";
 import type { ExportSpec, Note } from "../lib/ipc";
 
 function makeNote(over: Partial<Note> = {}): Note {
@@ -30,7 +31,11 @@ function makeNote(over: Partial<Note> = {}): Note {
 }
 
 // Wires the native save panel to a fixed path and records the export invoke.
-function setup(over: Partial<Note> = {}, savePath: string | null = "/Users/me/weekly-sync.md") {
+function setup(
+  over: Partial<Note> = {},
+  savePath: string | null = "/Users/me/weekly-sync.md",
+  flushEdits: () => Promise<void> = () => Promise.resolve(),
+) {
   const exportSpy = vi.fn();
   mockTauri({
     "plugin:dialog|save": () => savePath,
@@ -47,6 +52,7 @@ function setup(over: Partial<Note> = {}, savePath: string | null = "/Users/me/we
       open
       onClose={onClose}
       onCreateTeam={onCreateTeam}
+      flushEdits={flushEdits}
     />,
   );
   return { exportSpy, onClose, onCreateTeam };
@@ -87,6 +93,34 @@ describe("ExportModal", () => {
       },
     });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("waits for the note's queued edits to save before exporting", async () => {
+    // `export_note` reads the note from the database, so an edit still in the
+    // autosave queue would be missing from the file.
+    let saved!: () => void;
+    const flushEdits = vi.fn(() => new Promise<void>((resolve) => (saved = resolve)));
+    const { exportSpy } = setup({}, "/Users/me/weekly-sync.md", flushEdits);
+    await userEvent.click(screen.getByRole("button", { name: "Export…" }));
+    await waitFor(() => expect(flushEdits).toHaveBeenCalledTimes(1));
+    expect(exportSpy).not.toHaveBeenCalled();
+    saved();
+    await waitFor(() => expect(exportSpy).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not export a stale copy when the queued edits fail to save", async () => {
+    const { exportSpy, onClose } = setup({}, "/Users/me/weekly-sync.md", () =>
+      Promise.reject(new Error("database is locked")),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Export…" }));
+    await waitFor(() =>
+      expect(useRecordingStore.getState().errors.at(-1)).toMatchObject({
+        kind: "export",
+        message: "Error: database is locked",
+      }),
+    );
+    expect(exportSpy).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("carries the speaker-labels toggle and format into the spec", async () => {

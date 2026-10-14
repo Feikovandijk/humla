@@ -1,5 +1,5 @@
-import { beforeAll, describe, expect, it } from "vitest";
-import { act, screen, waitFor } from "@testing-library/react";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderApp } from "../test/app";
 import { makeNote } from "../test/fixtures";
@@ -81,6 +81,32 @@ describe("transcript copy control (#166)", () => {
       );
       expect(await navigator.clipboard.readText()).toBe(rebuilt);
     });
+  });
+
+  it("copies a free-text edit whose save hasn't come back yet", async () => {
+    // Between a batch leaving the autosave queue and its IPC returning, the
+    // store still holds the pre-edit text — the draft is the newer of the two.
+    const note = makeNote({ id: "n1", title: "Weekly sync", transcript: TRANSCRIPT });
+    let saved!: () => void;
+    const save = vi.fn(() => new Promise<void>((resolve) => (saved = resolve)));
+    renderApp("/note/n1", {
+      notes_list: () => [note],
+      notes_get: () => note,
+      note_timeline: () => [],
+      notes_update: save,
+    });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /^transcript$/i }));
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    const edited = "Alex: so where did we land on the freeze\nHege: friday";
+    fireEvent.change(screen.getByRole("textbox", { name: "Transcript" }), { target: { value: edited } });
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith({ id: "n1", patch: expect.objectContaining({ transcript: edited }) }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /^copy transcript$/i }));
+    expect(await navigator.clipboard.readText()).toBe(edited);
+    await act(async () => saved());
   });
 
   it("hides the control when there is no transcript to copy", async () => {

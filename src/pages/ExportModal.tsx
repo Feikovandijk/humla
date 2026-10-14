@@ -124,10 +124,14 @@ export function ExportModal({
   open,
   onClose,
   onCreateTeam,
+  flushEdits,
 }: {
   note: Note;
   open: boolean;
   onClose: () => void;
+  /** Saves the note's queued edits. `export_note` reads the note from the
+   *  database, so it waits for this before writing the file. */
+  flushEdits: () => Promise<void>;
   /** The team hint's CTA. Required rather than optional: the alternative is a
    *  hint that renders a link doing nothing, which is worse than no hint. The
    *  sheet has to live in the parent — see TeamHint. */
@@ -169,6 +173,7 @@ export function ExportModal({
         filters,
       });
       if (!path) return; // user cancelled the panel
+      await flushEdits();
       await ipc.exportNote(note.id, {
         path,
         format,
