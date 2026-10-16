@@ -337,6 +337,8 @@ export function Note() {
   // Reads are workspace-scoped, so a note with a workspace_id belongs to the
   // active one. Empty workspace_id = Private / local-only.
   const sharedWorkspace = useCloudStore((s) => s.status.current_workspace?.name);
+  const activeWorkspaceId = useCloudStore((s) => s.status.current_workspace?.id ?? "");
+  const navigate = useNavigate();
   // When signed in, the note's workspace becomes editable (move it between
   // Personal and any workspace you belong to). Signed out → static row only.
   const cloudLoggedIn = useCloudStore((s) => s.status.logged_in);
@@ -1236,11 +1238,24 @@ export function Note() {
               }
               onChange={async (workspaceId) => {
                 if (!draft || readOnly || !canMoveWorkspace || workspaceId === draft.workspace_id) return;
-                const next = { ...draft, workspace_id: workspaceId };
-                setDraft(next);
+                // A note moved out of the active workspace is no longer in any
+                // list this view belongs to, so the view leaves with it.
+                const leaving = workspaceId !== activeWorkspaceId;
+                await flushSave().catch(warnSaveFailed);
                 await ipc.setNoteWorkspace(draft.id, workspaceId);
-                // Moving out of the active workspace removes it from that
-                // list — refetch so the sidebar reflects the move.
+                if (leaving) {
+                  const dest = workspaceId
+                    ? (myWorkspaces.find((w) => w.id === workspaceId)?.name ?? "another workspace")
+                    : "Personal";
+                  const title = draft.title.trim();
+                  navigate(backTo);
+                  useRecordingStore
+                    .getState()
+                    .pushFlash(title ? `Moved “${title}” to ${dest}` : `Moved note to ${dest}`);
+                } else {
+                  // The backend drops the folder and client with the move.
+                  setDraft({ ...draft, workspace_id: workspaceId, folder_id: null, client_id: null });
+                }
                 await refreshNotes();
               }}
             />
