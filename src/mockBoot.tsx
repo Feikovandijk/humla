@@ -34,6 +34,7 @@ import { Toggle } from "./pages/settings/components/Toggle";
 import { NoteTitleBox, NoteToolbar, PanelEmpty, TranscriptEditor, TranscriptPlayer } from "./pages/Note";
 import { IntegrationsSection } from "./pages/settings/tabs/Integrations";
 import { SendToWebhookModal } from "./pages/SendToWebhookModal";
+import { ExportModal } from "./pages/ExportModal";
 import { ChatTab } from "./pages/settings/tabs/Chat";
 import { RecordingSection } from "./pages/settings/tabs/Recording";
 import { TranscriptionTab } from "./pages/settings/tabs/Transcription";
@@ -452,6 +453,18 @@ function webhookSendCase(destination: string | null): Scenario {
       },
       webhook_send_note: () => undefined,
     },
+  };
+}
+
+// ---- The export dialog, whose format picker carries three choices.
+function exportCase(): Scenario {
+  const note = makeNote({ id: "n1", title: "Weekly planning", summary: "- Ship", transcript: "You: hi" });
+  return {
+    wrap: (node) => <MemoryRouter>{node}</MemoryRouter>,
+    render: () => (
+      <ExportModal note={note} open onClose={() => {}} onCreateTeam={() => {}} flushEdits={async () => {}} />
+    ),
+    ipc: { export_note: () => undefined },
   };
 }
 
@@ -1211,6 +1224,7 @@ const CASES: Record<string, Scenario> = {
   "webhook-settings": integrationsCase(false, true),
   "webhook-send": webhookSendCase("hooks.example.com"),
   "webhook-send-unset": webhookSendCase(null),
+  export: exportCase(),
 
   // --- #147: the issue's exact report — recommended model already pulled.
   recommended: summaryCase(["gemma4:12b-mlx", "embeddinggemma"]),

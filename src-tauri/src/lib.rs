@@ -1,5 +1,6 @@
 mod db;
 mod html_text;
+mod export_doc;
 mod keychain;
 mod openai;
 mod anthropic;

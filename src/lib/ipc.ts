@@ -86,9 +86,8 @@ export type Client = {
 };
 
 // Note export (issue #18). One combined file; content selection + format +
-// speaker-label toggle. Adding a future format is just a new union member
-// here + a formatter branch in the backend — no surface rework.
-export type ExportFormat = "markdown" | "txt";
+// speaker-label toggle. Mirrors `ExportFormat` in `commands/export.rs`.
+export type ExportFormat = "markdown" | "txt" | "pdf";
 
 export type ExportSpec = {
   // Destination chosen in the native save panel.

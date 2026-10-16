@@ -3,13 +3,32 @@ export type Release = {
   date: string;
   title: string;
   summary: string;
-  visual?: "filters" | "privacy" | "activity" | "updates" | "speakers" | "webhook";
+  visual?: "filters" | "privacy" | "activity" | "updates" | "speakers" | "webhook" | "export";
   paragraphs: string[];
   highlights: string[];
   issues: { title: string; reference: string; status: "Open" | "Closed"; url: string }[];
 };
 
 export const releases: Release[] = [
+  {
+    version: "0.68.0",
+    date: "2026-10-16",
+    title: "Export to PDF",
+    summary: "Save a note as a PDF, and plain text exports come out as clean text.",
+    visual: "export",
+    paragraphs: [
+      "Export… in a note’s ⋯ menu now has a third format: PDF. You get a ready-to-share document with the title, the summary, the transcript and your notes in the sections you picked, set in Humla’s own typeface, with page numbers at the bottom. Headings, lists, tables and bold text from the summary carry over, and speaker names are in bold.",
+      "Plain text exports are clean text now. They used to keep the summary’s Markdown, so you got lines full of ## and ** that only make sense in a Markdown editor. Now headings are plain lines, lists get proper bullets, and tables line up in columns. Markdown exports haven’t changed.",
+    ],
+    highlights: [
+      "Export a note as a PDF with page numbers.",
+      "Plain text exports no longer contain Markdown symbols.",
+      "Lists, tables and headings stay readable in both formats.",
+    ],
+    issues: [
+      { title: "Export utility: transcript + summary to files (Markdown, txt)", reference: "#18", status: "Closed", url: "https://github.com/michaelwilhelmsen/humla/issues/18" },
+    ],
+  },
   {
     version: "0.67.1",
     date: "2026-10-16",
