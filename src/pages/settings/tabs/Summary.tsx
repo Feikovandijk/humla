@@ -51,7 +51,7 @@ export function SummaryTab({
           <>
             <Row
               label="Model"
-              description="Reasoning models (gpt-5.x, o-series) are handled automatically."
+              description="Reasoning models (gpt-5 and later, o-series) are handled automatically."
               control={
                 <Select
                   value={s.summary_model}

@@ -238,7 +238,7 @@ pub async fn transcribe_file(
 struct ChatRequest<'a> {
     model: &'a str,
     messages: Vec<ChatMessage<'a>>,
-    // Reasoning models (gpt-5.x family + o-series) reject custom temperature
+    // Reasoning models (gpt-5 and later + o-series) reject custom temperature
     // values with a 400 error; only the default (1) is allowed. Traditional
     // chat models (gpt-4o, gpt-4, gpt-3.5) accept it. `skip_serializing_if`
     // lets us send the right shape per model without a per-model payload.
@@ -301,15 +301,17 @@ fn empty_answer_error(model: &str, finish_reason: Option<&str>, reasoning_chars:
     anyhow!("{model} returned an empty response")
 }
 
-/// Reasoning models: gpt-5.x family and the o-series. They reject the
-/// `temperature` parameter and accept extra knobs like `reasoning_effort`
-/// (which we leave at the API default).
+/// Reasoning models: gpt-5 and every later generation, plus the o-series.
+/// They reject the `temperature` parameter and accept extra knobs like
+/// `reasoning_effort` (which we leave at the API default).
 pub(crate) fn is_reasoning_model(model: &str) -> bool {
-    if let Some(rest) = model.strip_prefix("gpt-5") {
-        // "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5.4", "gpt-5.4-mini",
-        // "gpt-5.5", … all match. "gpt-50" (hypothetical future non-reasoning
-        // brand) wouldn't match because the next char would be a digit.
-        rest.is_empty() || rest.starts_with('.') || rest.starts_with('-')
+    if let Some(rest) = model.strip_prefix("gpt-") {
+        // "gpt-5", "gpt-5.4-mini", "gpt-6", "gpt-6.1-nano", … — a major
+        // version of 5 or above. "gpt-4o" and "gpt-4.1" stay below it.
+        let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        let tail = &rest[digits..];
+        rest[..digits].parse::<u32>().is_ok_and(|major| major >= 5)
+            && (tail.is_empty() || tail.starts_with('.') || tail.starts_with('-'))
     } else if let Some(rest) = model.strip_prefix('o') {
         // "o1", "o3", "o4-mini" — but not "openai-something" or other
         // o-prefixed names that aren't reasoning models.
@@ -484,7 +486,7 @@ where
             .map(|(role, content)| ChatMessage { role, content })
             .collect(),
         stream: true,
-        // Reasoning models (gpt-5.x / o-series) reject a custom temperature.
+        // Reasoning models (gpt-5 and later / o-series) reject a custom temperature.
         temperature: if is_reasoning_model(model) { None } else { Some(0.3) },
     };
     // Shares `post_chat` with the summary path, so chat inherits its retry on
@@ -707,7 +709,7 @@ where
             ChatMessage { role: "user", content: transcript },
         ],
         stream: true,
-        // Reasoning models (gpt-5.x / o-series) reject a custom temperature.
+        // Reasoning models (gpt-5 and later / o-series) reject a custom temperature.
         temperature: if is_reasoning_model(model) { None } else { Some(0.2) },
     };
     let ep = Endpoint::Cloud;
@@ -1900,6 +1902,7 @@ mod tests {
         for m in [
             "gpt-5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.5",
             "gpt-5-mini", "gpt-5-nano",
+            "gpt-6", "gpt-6-mini", "gpt-6.1", "gpt-6.1-nano", "gpt-7",
             "o1", "o3", "o4-mini",
         ] {
             assert!(is_reasoning_model(m), "expected reasoning: {m}");
@@ -1940,7 +1943,7 @@ mod tests {
     fn traditional_chat_models_not_reasoning() {
         for m in [
             "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4",
-            "gpt-3.5-turbo", "chatgpt-4o-latest",
+            "gpt-3.5-turbo", "gpt-4.1", "gpt-4.1-mini", "chatgpt-4o-latest",
             "openai-internal", // "o" prefix but not followed by a digit
         ] {
             assert!(!is_reasoning_model(m), "expected NOT reasoning: {m}");
