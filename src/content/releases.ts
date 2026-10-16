@@ -11,6 +11,22 @@ export type Release = {
 
 export const releases: Release[] = [
   {
+    version: "0.67.1",
+    date: "2026-10-16",
+    title: "Moving a note to another workspace",
+    summary: "Moving a note now takes you back to your list and tells you where it went.",
+    paragraphs: [
+      "When you moved the note you were reading to another workspace, Humla left you on it, even though it was no longer in the workspace you were in. Now you go back to the list you came from, and a short message says where the note went.",
+      "A moved note also leaves its folder and client behind, since those belong to the old workspace. Before, it kept them and ended up in no folder at all in the new workspace, not even under No folder. You can file it again once it's there.",
+    ],
+    highlights: [
+      "Moving a note to another workspace takes you back to your list.",
+      "A message says which workspace the note moved to.",
+      "A moved note drops its old folder and client, so you can file it again.",
+    ],
+    issues: [],
+  },
+  {
     version: "0.67.0",
     date: "2026-10-14",
     title: "Better auto-titles and webhook support",
