@@ -80,6 +80,12 @@ rmcp = { version = "3", default-features = false, features = ["server", "transpo
 # diarize input. No DSP dependencies of its own.
 echo-probe = { path = "crates/echo-probe" }
 tauri-plugin-autostart = "~2.5"
+# Note export: the summary's Markdown is parsed once and rendered as plain
+# text or laid out as a PDF. rustybuzz must stay on krilla's version, since it
+# measures the lines krilla then shapes and draws.
+pulldown-cmark = { version = "0.13", default-features = false }
+krilla = { version = "0.8", default-features = false, features = ["simple-text"] }
+rustybuzz = "0.20"
 
 [dev-dependencies]
 tempfile = "3"

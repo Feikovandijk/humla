@@ -136,6 +136,31 @@ describe("ExportModal", () => {
     expect(spec.format).toBe("txt");
   });
 
+  it("offers PDF and proposes a .pdf file for it", async () => {
+    const saveSpy = vi.fn((_args: unknown) => "/Users/me/weekly-sync.pdf");
+    const exportSpy = vi.fn();
+    mockTauri({
+      "plugin:dialog|save": (args) => saveSpy(args),
+      export_note: (args) => exportSpy(args),
+    });
+    render(
+      <ExportModal
+        note={makeNote()}
+        open
+        onClose={vi.fn()}
+        onCreateTeam={vi.fn()}
+        flushEdits={() => Promise.resolve()}
+      />,
+    );
+    await userEvent.click(screen.getByRole("radio", { name: "PDF" }));
+    await userEvent.click(screen.getByRole("button", { name: "Export…" }));
+    await waitFor(() => expect(exportSpy).toHaveBeenCalledTimes(1));
+    expect(saveSpy.mock.calls[0]![0]).toMatchObject({
+      options: { defaultPath: "weekly-sync.pdf", filters: [{ extensions: ["pdf"] }] },
+    });
+    expect((exportSpy.mock.calls[0]![0] as { spec: ExportSpec }).spec.format).toBe("pdf");
+  });
+
   it("selecting Notes includes it in the spec", async () => {
     const { exportSpy } = setup();
     await userEvent.click(screen.getByRole("checkbox", { name: "Notes" }));

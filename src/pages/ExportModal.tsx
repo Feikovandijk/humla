@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { X } from "lucide-react";
 import { ipc, type ExportFormat, type Note } from "../lib/ipc";
@@ -10,12 +10,18 @@ import { Toggle } from "./settings/components/Toggle";
 import { Btn } from "./settings/components/Btn";
 
 // Export a note's summary / transcript / typed notes as ONE combined
-// Markdown or plain-text file (issue #18). The kit modal supplies only the
+// Markdown, plain-text or PDF file (issue #18). The kit modal supplies only the
 // chrome; this component owns the body. Confirming opens the native save
 // panel (dialog plugin) and hands the chosen path to `export_note`.
 
 // Slugify a note title into a filename stem. Unicode-letter/number aware so
 // non-ASCII titles still produce a readable name; empty → "note".
+const FORMATS: Record<ExportFormat, { label: string; filter: string; extensions: string[] }> = {
+  markdown: { label: "Markdown", filter: "Markdown", extensions: ["md", "markdown"] },
+  txt: { label: "Plain text", filter: "Plain text", extensions: ["txt"] },
+  pdf: { label: "PDF", filter: "PDF document", extensions: ["pdf"] },
+};
+
 function slug(title: string): string {
   const s = title
     .toLowerCase()
@@ -156,21 +162,13 @@ export function ExportModal({
     !(includeTranscript && hasTranscript) &&
     !(includeNotes && hasNotes);
 
-  const filters = useMemo(
-    () =>
-      format === "markdown"
-        ? [{ name: "Markdown", extensions: ["md", "markdown"] }]
-        : [{ name: "Plain text", extensions: ["txt"] }],
-    [format],
-  );
-
   async function onExport() {
     setBusy(true);
     try {
-      const ext = format === "markdown" ? "md" : "txt";
+      const { filter, extensions } = FORMATS[format];
       const path = await save({
-        defaultPath: `${slug(note.title)}.${ext}`,
-        filters,
+        defaultPath: `${slug(note.title)}.${extensions[0]}`,
+        filters: [{ name: filter, extensions }],
       });
       if (!path) return; // user cancelled the panel
       await flushEdits();
@@ -234,10 +232,10 @@ export function ExportModal({
             label="Export format"
             value={format}
             onChange={setFormat}
-            options={[
-              { value: "markdown", label: "Markdown" },
-              { value: "txt", label: "Plain text" },
-            ]}
+            options={(Object.keys(FORMATS) as ExportFormat[]).map((value) => ({
+              value,
+              label: FORMATS[value].label,
+            }))}
           />
         </div>
 

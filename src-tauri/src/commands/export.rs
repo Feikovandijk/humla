@@ -1,29 +1,26 @@
 //! Note export (issue #18). Assembles a note's selected content — summary,
-//! transcript, typed notes — into a single Markdown or plain-text document
-//! and writes it to a user-chosen path.
+//! transcript, typed notes — into a single Markdown, plain-text or PDF
+//! document and writes it to a user-chosen path.
 //!
 //! The path is chosen on the frontend via the dialog plugin's native save
-//! panel and passed in as `spec.path`; this command is a thin shell around
-//! the pure [`build_export_document`] assembler (unit-tested below) plus a
-//! filesystem write. Unlike `open_in_finder`, the write is intentionally NOT
-//! constrained to the app data directory — the whole point is to let the user
-//! save anywhere they picked in the panel.
+//! panel and passed in as `spec.path`. Unlike `open_in_finder`, the write is
+//! intentionally NOT constrained to the app data directory — the whole point
+//! is to let the user save anywhere they picked in the panel.
 
 use super::err;
 use crate::db;
+use crate::export_doc::{self, Block};
 use crate::html_text::html_to_text;
 use crate::AppState;
 use serde::Deserialize;
 use tauri::{AppHandle, Manager};
 
-/// Output file format. Adding a new format is a matter of adding a variant
-/// here plus a branch in [`heading`] / [`build_export_document`] — no change
-/// to the command surface or the frontend invoke shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ExportFormat {
     Markdown,
     Txt,
+    Pdf,
 }
 
 /// What to export and how. Mirrors the frontend `ExportSpec` type. `path` is
@@ -41,57 +38,39 @@ pub struct ExportSpec {
     pub include_speaker_labels: bool,
 }
 
-/// Render a section heading for the given format and level (1 = document
-/// title, 2 = section). Markdown uses ATX `#`/`##`; plain text underlines the
-/// text with `=` (title) or `-` (section) so the structure survives without
-/// markup.
-fn heading(format: ExportFormat, level: u8, text: &str) -> String {
-    match format {
-        ExportFormat::Markdown => format!("{} {}", "#".repeat(level as usize), text),
-        ExportFormat::Txt => {
-            let bar = if level <= 1 { '=' } else { '-' };
-            let underline: String = std::iter::repeat(bar).take(text.chars().count().max(1)).collect();
-            format!("{text}\n{underline}")
+/// A section's content, before it is rendered for a format.
+enum Content {
+    /// The summary, which the model writes as Markdown.
+    Markdown(String),
+    Transcript(String),
+    /// The typed notes, already reduced to plain text.
+    Notes(String),
+}
+
+impl Content {
+    fn raw(&self) -> &str {
+        match self {
+            Content::Markdown(s) | Content::Transcript(s) | Content::Notes(s) => s,
+        }
+    }
+
+    fn blocks(&self, labelled: bool) -> Vec<Block> {
+        match self {
+            Content::Markdown(s) => export_doc::parse_markdown(s),
+            Content::Transcript(s) => export_doc::transcript_turns(s, labelled),
+            Content::Notes(s) => export_doc::plain_lines(s),
         }
     }
 }
 
-/// Strip a leading `Label: ` speaker prefix from a single transcript line.
-///
-/// Transcript turns are stored as `Label: text` (e.g. `Speaker 1: …`, `You: …`,
-/// or a renamed name). We only remove a *short*, single-segment prefix anchored
-/// at the line start so a colon inside spoken text (`So the plan is: ship it`)
-/// is left alone unless it happens to sit within the first ~40 chars — an
-/// acceptable v1 trade-off given the fixed `Label: ` storage shape.
-fn strip_label(line: &str) -> &str {
-    if let Some(idx) = line.find(": ") {
-        // Prefix must be reasonably short and free of its own line breaks to
-        // look like a speaker label rather than a mid-sentence colon.
-        let prefix = &line[..idx];
-        if !prefix.is_empty() && prefix.chars().count() <= 40 && !prefix.contains(['\n', '\r']) {
-            return &line[idx + 2..];
-        }
-    }
-    line
+fn display_title(title: &str) -> &str {
+    if title.trim().is_empty() { "Untitled note" } else { title.trim() }
 }
 
-/// Assemble the export document from a note's fields and a spec. Pure — no I/O,
-/// so the whole content contract is unit-testable without a database or a
-/// filesystem. `body_html` is the raw Tiptap HTML; it's converted to plain
-/// text via the shared [`html_to_text`] helper (richer HTML→Markdown is a
-/// deliberate later refinement, per the issue).
-pub(crate) fn build_export_document(
-    title: &str,
-    summary: &str,
-    transcript: &str,
-    body_html: &str,
-    spec: &ExportSpec,
-) -> String {
-    let title = if title.trim().is_empty() { "Untitled note" } else { title.trim() };
-    let mut sections: Vec<String> = Vec::new();
-
+fn sections(summary: &str, transcript: &str, body_html: &str, spec: &ExportSpec) -> Vec<(&'static str, Content)> {
+    let mut out = Vec::new();
     if spec.include_summary {
-        sections.push(section(spec.format, "Summary", summary.trim()));
+        out.push(("Summary", Content::Markdown(summary.trim().to_string())));
     }
     if spec.include_transcript {
         let body = if spec.include_speaker_labels {
@@ -99,46 +78,86 @@ pub(crate) fn build_export_document(
         } else {
             transcript
                 .lines()
-                .map(strip_label)
+                .map(|l| export_doc::split_label(l).map_or(l, |(_, text)| text))
                 .collect::<Vec<_>>()
                 .join("\n")
                 .trim()
                 .to_string()
         };
-        sections.push(section(spec.format, "Transcript", &body));
+        out.push(("Transcript", Content::Transcript(body)));
     }
     if spec.include_notes {
-        let notes = html_to_text(body_html);
-        sections.push(section(spec.format, "Notes", notes.trim()));
+        out.push(("Notes", Content::Notes(html_to_text(body_html).trim().to_string())));
     }
+    out
+}
 
-    let mut doc = heading(spec.format, 1, title);
-    if !sections.is_empty() {
+/// Markdown uses ATX `#`/`##`; plain text underlines the text with `=`
+/// (title) or `-` (section) so the structure survives without markup.
+fn heading(markdown: bool, level: u8, text: &str) -> String {
+    if markdown {
+        return format!("{} {}", "#".repeat(level as usize), text);
+    }
+    let bar = if level <= 1 { '=' } else { '-' };
+    let underline: String = std::iter::repeat(bar).take(text.chars().count().max(1)).collect();
+    format!("{text}\n{underline}")
+}
+
+/// Assemble a Markdown or plain-text export. Pure — no I/O, so the whole
+/// content contract is unit-testable without a database or a filesystem.
+/// `body_html` is the raw Tiptap HTML. A checked-but-empty section still
+/// emits its heading with an explicit empty marker, so the user sees it was
+/// included and had no content.
+pub(crate) fn build_export_document(
+    title: &str,
+    summary: &str,
+    transcript: &str,
+    body_html: &str,
+    spec: &ExportSpec,
+) -> String {
+    let markdown = spec.format == ExportFormat::Markdown;
+    let rendered: Vec<String> = sections(summary, transcript, body_html, spec)
+        .into_iter()
+        .map(|(name, content)| {
+            let body = if content.raw().is_empty() {
+                if markdown { "_(empty)_" } else { "(empty)" }.to_string()
+            } else if markdown || matches!(content, Content::Transcript(_)) {
+                content.raw().to_string()
+            } else {
+                export_doc::render_text(&content.blocks(false))
+            };
+            format!("{}\n\n{body}", heading(markdown, 2, name))
+        })
+        .collect();
+
+    let mut doc = heading(markdown, 1, display_title(title));
+    if !rendered.is_empty() {
         doc.push_str("\n\n");
-        doc.push_str(&sections.join("\n\n"));
+        doc.push_str(&rendered.join("\n\n"));
     }
     doc.push('\n');
     doc
 }
 
-/// Render one `## Heading` + body block. A checked-but-empty section still
-/// emits its heading with an explicit empty marker so the user sees the
-/// section was intentionally included but had no content.
-fn section(format: ExportFormat, name: &str, body: &str) -> String {
-    let head = heading(format, 2, name);
-    if body.is_empty() {
-        let placeholder = match format {
-            ExportFormat::Markdown => "_(empty)_",
-            ExportFormat::Txt => "(empty)",
-        };
-        format!("{head}\n\n{placeholder}")
-    } else {
-        format!("{head}\n\n{body}")
-    }
+/// Lay out a PDF export from the same sections the text formats use.
+pub(crate) fn build_export_pdf(
+    title: &str,
+    summary: &str,
+    transcript: &str,
+    body_html: &str,
+    spec: &ExportSpec,
+) -> Result<Vec<u8>, String> {
+    let sections: Vec<export_doc::Section> = sections(summary, transcript, body_html, spec)
+        .into_iter()
+        .map(|(name, content)| export_doc::Section {
+            name: name.to_string(),
+            blocks: content.blocks(spec.include_speaker_labels),
+        })
+        .collect();
+    export_doc::render_pdf(display_title(title), &sections)
 }
 
-/// Export a note to the path chosen in the native save panel. Fetches the
-/// note, builds the document via [`build_export_document`], and writes it.
+/// Export a note to the path chosen in the native save panel.
 #[tauri::command]
 pub fn export_note(app: AppHandle, note_id: String, spec: ExportSpec) -> Result<(), String> {
     let state: tauri::State<AppState> = app.state();
@@ -146,14 +165,16 @@ pub fn export_note(app: AppHandle, note_id: String, spec: ExportSpec) -> Result<
         let conn = state.db.lock();
         db::get_note(&conn, &note_id).map_err(err)?
     };
-    let doc = build_export_document(
-        &note.title,
-        &note.summary,
-        &note.transcript,
-        &note.body,
-        &spec,
-    );
-    std::fs::write(&spec.path, doc).map_err(|e| format!("write export file: {e}"))?;
+    let bytes = match spec.format {
+        ExportFormat::Pdf => {
+            build_export_pdf(&note.title, &note.summary, &note.transcript, &note.body, &spec)?
+        }
+        ExportFormat::Markdown | ExportFormat::Txt => {
+            build_export_document(&note.title, &note.summary, &note.transcript, &note.body, &spec)
+                .into_bytes()
+        }
+    };
+    std::fs::write(&spec.path, bytes).map_err(|e| format!("write export file: {e}"))?;
     Ok(())
 }
 
@@ -194,6 +215,34 @@ mod tests {
         let out = build_export_document("Sync", "Done", "You: hey", "", &s);
         assert!(out.starts_with("Sync\n====\n"), "title underline: {out:?}");
         assert!(out.contains("Summary\n-------\n\nDone"));
+    }
+
+    #[test]
+    fn plain_text_carries_no_markdown() {
+        let mut s = spec(ExportFormat::Txt);
+        s.include_notes = true;
+        let out = build_export_document(
+            "Sync",
+            "## Beslutninger\n\n- **Eier:** Hege\n- Frist *fredag*",
+            "You: hey",
+            "<ul><li>typed</li></ul>",
+            &s,
+        );
+        assert!(
+            out.contains("Summary\n-------\n\nBeslutninger\n\n• Eier: Hege\n• Frist fredag\n\n"),
+            "{out:?}"
+        );
+        assert!(out.contains("Transcript\n----------\n\nYou: hey"), "{out:?}");
+        assert!(out.contains("Notes\n-----\n\n• typed\n"), "{out:?}");
+        assert!(!out.contains(['#', '*']), "{out:?}");
+    }
+
+    #[test]
+    fn pdf_export_is_a_pdf() {
+        let mut s = spec(ExportFormat::Pdf);
+        s.include_notes = true;
+        let pdf = build_export_pdf("Sync", "- **Ship** v1", "You: hey", "<p>typed</p>", &s).unwrap();
+        assert!(pdf.starts_with(b"%PDF-"));
     }
 
     #[test]
