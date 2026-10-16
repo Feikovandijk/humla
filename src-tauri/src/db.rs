@@ -521,9 +521,12 @@ pub fn set_note_private(conn: &Connection, id: &str, private: bool) -> Result<()
 /// tombstone-in-old + upsert-in-new), and the push is resurrect-aware
 /// (`cloud_sync`'s `push_note`) so moving a note back into a workspace still
 /// wins last-write-wins over an earlier tombstone without a bumped timestamp.
+///
+/// Folders and clients belong to one workspace, so the note leaves both behind:
+/// an id kept from the old workspace names nothing in the new one.
 pub fn set_note_workspace(conn: &Connection, id: &str, workspace: &str) -> Result<()> {
     conn.execute(
-        "UPDATE notes SET workspace_id = ?1 WHERE id = ?2",
+        "UPDATE notes SET workspace_id = ?1, folder_id = NULL, client_id = NULL WHERE id = ?2",
         params![workspace, id],
     )?;
     Ok(())
@@ -3227,6 +3230,28 @@ mod tests {
 
         set_note_private(&conn, &note.id, false).unwrap();
         assert!(!get_note(&conn, &note.id).unwrap().private);
+    }
+
+    /// A folder or client id from the old workspace names nothing in the new
+    /// one, and a note kept on it would sit in no folder view and also fail the
+    /// "No folder" filter. The move itself still leaves `updated_at` alone.
+    #[test]
+    fn workspace_move_leaves_folder_and_client_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open(&dir.path().join("move.sqlite")).unwrap();
+        let note = create_note(&conn, "en", "meeting", "wsA").unwrap();
+        let folder = create_folder(&conn, "Sales", "wsA").unwrap();
+        let client = create_client(&conn, "Acme", "wsA").unwrap();
+        move_note(&conn, &note.id, Some(&folder.id)).unwrap();
+        set_note_client(&conn, &note.id, Some(&client.id)).unwrap();
+        let filed = get_note(&conn, &note.id).unwrap();
+
+        set_note_workspace(&conn, &note.id, "wsB").unwrap();
+        let moved = get_note(&conn, &note.id).unwrap();
+        assert_eq!(moved.workspace_id, "wsB");
+        assert_eq!(moved.folder_id, None);
+        assert_eq!(moved.client_id, None);
+        assert_eq!(moved.updated_at, filed.updated_at);
     }
 
     /// Issue #167 — the detected recording language round-trips and starts
