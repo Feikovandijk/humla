@@ -11,6 +11,20 @@ export type Release = {
 
 export const releases: Release[] = [
   {
+    version: "0.68.1",
+    date: "2026-10-16",
+    title: "Summaries with GPT-6",
+    summary: "Summaries work again when you pick a GPT-6 model.",
+    paragraphs: [
+      "If you chose one of OpenAI’s GPT-6 models for summaries, the summary failed with an error about temperature. Humla now handles GPT-6 the way it handles GPT-5. It stops sending the setting those models don’t accept, so summaries, chat and automatic titles all work with them.",
+    ],
+    highlights: [
+      "Summaries work with GPT-6 models.",
+      "Chat and automatic titles work with GPT-6 models too.",
+    ],
+    issues: [],
+  },
+  {
     version: "0.68.0",
     date: "2026-10-16",
     title: "Export to PDF",
