@@ -159,8 +159,12 @@ fn http() -> reqwest::Client {
 // ---- persisted config (settings table) -------------------------------------
 
 pub(crate) fn read_base_url(state: &State<'_, AppState>) -> Option<String> {
-    let conn = state.db.lock();
-    db::get_setting(&conn, SETTING_BASE_URL)
+    base_url(&state.db.lock())
+}
+
+/// The configured server URL, or `None` when there is none.
+pub(crate) fn base_url(conn: &rusqlite::Connection) -> Option<String> {
+    db::get_setting(conn, SETTING_BASE_URL)
         .ok()
         .flatten()
         .filter(|s| !s.trim().is_empty())

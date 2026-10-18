@@ -95,4 +95,7 @@ impl SyncObserver for NoopSync {}
 pub struct SyncContext {
     pub db: Arc<parking_lot::Mutex<rusqlite::Connection>>,
     pub app: tauri::AppHandle,
+    /// The same cache `AppState` gets. A sync implementation is built before
+    /// `AppState` is managed, so it must not reach the cache through it.
+    pub keychain_cache: crate::keychain::Cache,
 }
