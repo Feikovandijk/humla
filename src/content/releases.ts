@@ -11,6 +11,20 @@ export type Release = {
 
 export const releases: Release[] = [
   {
+    version: "0.69.1",
+    date: "2026-10-18",
+    title: "Humla opens again",
+    summary: "Humla 0.69.0 closed right after opening if you use a team workspace. This fixes it.",
+    paragraphs: [
+      "If you use a team workspace, Humla 0.69.0 closed as soon as you opened it. That came from how the new sign-in code started up, and 0.69.1 fixes it. Two-factor authentication and everything else from 0.69.0 work as before.",
+      "A Mac on 0.69.0 can’t update itself, since it closes before it gets the chance. Download 0.69.1 from the releases page and install it over the old one. Your notes and settings stay where they are.",
+    ],
+    highlights: [
+      "Humla opens again for people in a team workspace.",
+    ],
+    issues: [],
+  },
+  {
     version: "0.69.0",
     date: "2026-10-18",
     title: "Two-factor authentication",
