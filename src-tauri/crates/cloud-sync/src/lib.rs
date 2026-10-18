@@ -767,6 +767,11 @@ impl Worker {
     async fn push_delete(&self, collection: &str, uuid: &str, workspace: &str) -> Result<()> {
         let auth = self.ensure_auth().await?;
         let Some((pb_id, _, _)) = self.find_remote_id(collection, uuid, workspace, &auth.token).await? else {
+            // A workspace that requires two-factor authentication hides its
+            // records from a member without it; one not found there may exist.
+            if self.requires_two_factor(workspace).await? {
+                return Err(anyhow::Error::new(TwoFactorRequired));
+            }
             return Ok(()); // never synced; nothing to tombstone
         };
         let resp = self
@@ -1330,7 +1335,8 @@ impl Worker {
 
     /// Whether `workspace` requires two-factor authentication the user doesn't
     /// have — then the server refuses every push into it. A server without
-    /// two-factor authentication (404) has no such workspace.
+    /// two-factor authentication has no such workspace, whether it answers 404
+    /// or with something that isn't a status at all, such as its web page.
     async fn requires_two_factor(&self, workspace: &str) -> Result<bool> {
         let auth = self.ensure_auth().await?;
         let resp = self
@@ -1342,7 +1348,9 @@ impl Worker {
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(false);
         }
-        let status: serde_json::Value = self.pb_ok(resp).await?.json().await?;
+        let Ok(status) = self.pb_ok(resp).await?.json::<serde_json::Value>().await else {
+            return Ok(false);
+        };
         let enabled = status.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
         let required = status
             .get("required_by")
@@ -2921,6 +2929,50 @@ mod it {
 
         assert_eq!(failure_state(&pushed.unwrap_err()), SyncState::TwoFactorRequired);
         assert!(outbox_attempts(&db, "n1").is_some(), "the change is kept");
+    }
+
+    /// The same workspace hides its records rather than refusing to show them,
+    /// so a deletion finds nothing to tombstone. It stays queued all the same:
+    /// the record is there, and teammates still see it.
+    #[tokio::test]
+    async fn a_deletion_in_a_workspace_that_requires_two_factor_is_kept() {
+        let base = fake_server(|method, path| match (method, path) {
+            ("GET", p) if p.starts_with("/api/humla/2fa/status") => (
+                200,
+                r#"{"available":true,"enabled":false,"recovery_codes_left":0,"required_by":[{"id":"wsA","name":"Acme"}]}"#.into(),
+            ),
+            ("GET", p) if p.starts_with("/api/collections/notes/records") => (200, r#"{"items":[]}"#.into()),
+            _ => (400, r#"{"message":"unexpected"}"#.into()),
+        })
+        .await;
+        let db = test_db();
+        let w = worker(db.clone(), config_for(&base, "wsA", FakeSession::signed_in("t1")));
+        w.enqueue_row("note", "n1", "delete", "wsA").unwrap();
+
+        let pushed = w.drain_outbox().await;
+
+        assert_eq!(failure_state(&pushed.unwrap_err()), SyncState::TwoFactorRequired);
+        assert!(outbox_attempts(&db, "n1").is_some(), "the deletion is kept");
+    }
+
+    /// A server without the two-factor routes can answer them with its web page
+    /// rather than a 404. That says nothing about a requirement, so a refused
+    /// push is still dropped instead of blocking every change behind it.
+    #[tokio::test]
+    async fn a_server_without_two_factor_still_drops_an_unpushable_change() {
+        let base = fake_server(|method, path| match (method, path) {
+            ("GET", p) if p.starts_with("/api/humla/2fa/status") => (200, "<!doctype html><title>Humla</title>".into()),
+            ("GET", p) if p.starts_with("/api/collections/notes/records") => (200, r#"{"items":[]}"#.into()),
+            _ => (400, r#"{"message":"Failed to create record."}"#.into()),
+        })
+        .await;
+        let db = test_db();
+        let w = worker(db.clone(), config_for(&base, "wsA", FakeSession::signed_in("t1")));
+        insert_note(&db, "n1", "wsA");
+        w.enqueue(Op::Note { id: "n1".into(), delete: false }).unwrap();
+
+        assert!(w.drain_outbox().await.is_ok());
+        assert_eq!(outbox_attempts(&db, "n1"), None, "dropped as un-pushable");
     }
 
     /// Without that requirement, a push the server refuses is still dropped.

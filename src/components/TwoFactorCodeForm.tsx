@@ -73,7 +73,7 @@ export function TwoFactorCodeForm({
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && submit()}
-        placeholder={recovery ? "XXXXX-XXXXX" : "123456"}
+        placeholder={recovery ? "xxxxx-xxxxx" : "123456"}
       />
       {error && <p className="text-xs text-[var(--color-danger)]">{error}</p>}
       <div className="flex flex-wrap items-center gap-3">

@@ -14,14 +14,14 @@ export const DEMO_TWO_FACTOR_SETUP: TwoFactorSetup = {
 };
 
 export const DEMO_RECOVERY_CODES = [
-  "K7QPM-2XW9D",
-  "F3RNT-8HB4Z",
-  "Y6CJV-5LM2Q",
-  "P9WDX-7TK3N",
-  "B2HZS-4QF8R",
-  "M5LGT-9CV6J",
-  "T8NQW-3DY7P",
-  "W4XKB-6RH2M",
-  "H7JPF-2ZN9L",
-  "R3VMC-8GT5X",
+  "k7qpm-2xw9d",
+  "f3rnt-8hb4z",
+  "y6cjv-5lm2q",
+  "p9wdx-7tk3n",
+  "b2hzs-4qf8r",
+  "m5lgt-9cv6j",
+  "t8nqw-3dy7p",
+  "w4xkb-6rh2m",
+  "h7jpf-2zn9l",
+  "r3vmc-8gt5x",
 ];
