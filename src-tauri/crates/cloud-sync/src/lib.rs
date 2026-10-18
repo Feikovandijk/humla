@@ -26,7 +26,9 @@
 //! access is a scoped lock/snapshot/unlock before any network call. That keeps
 //! the worker future `Send`.
 
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -42,13 +44,59 @@ use tokio::sync::mpsc;
 pub type Db = Arc<Mutex<Connection>>;
 
 
+/// The token the worker sends, and who it belongs to.
+#[derive(Clone, Debug)]
+pub struct Auth {
+    pub token: String,
+    pub user_id: String,
+}
+
+pub type TokenFuture<'a> = Pin<Box<dyn Future<Output = Result<Auth>> + Send + 'a>>;
+
+/// Where the worker gets its token. The app owns the one signed-in session —
+/// keeps it across launches and renews it — so the worker never signs in
+/// itself: for an account with two-factor authentication on, a password
+/// sign-in can't produce a token, and each attempt leaves a challenge on the
+/// server.
+pub trait Session: Send + Sync {
+    /// The signed-in user's token. An error carrying [`SignedOut`] means only
+    /// the user can fix it, by signing in again.
+    fn token(&self) -> TokenFuture<'_>;
+    /// The server refused `token`, so the next [`Session::token`] renews it.
+    fn rejected(&self, token: &str);
+}
+
+/// The session has ended and the user has to sign in again.
+#[derive(Debug)]
+pub struct SignedOut;
+
+impl std::fmt::Display for SignedOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("signed out")
+    }
+}
+
+impl std::error::Error for SignedOut {}
+
+/// The workspace requires two-factor authentication the user doesn't have, so
+/// the server refuses everything in it until they set it up.
+#[derive(Debug)]
+pub struct TwoFactorRequired;
+
+impl std::fmt::Display for TwoFactorRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the workspace requires two-factor authentication")
+    }
+}
+
+impl std::error::Error for TwoFactorRequired {}
+
 #[derive(Clone)]
 pub struct Config {
     /// PocketBase base URL, e.g. `https://sync.humla.app`.
     pub base_url: String,
-    /// Auth identity (email) + password for the syncing user.
-    pub email: String,
-    pub password: String,
+    /// The signed-in session the worker borrows its token from.
+    pub session: Arc<dyn Session>,
     /// PocketBase `workspaces` record id this device syncs into.
     pub workspace_id: String,
     /// How often to pull remote changes.
@@ -152,6 +200,44 @@ pub enum SyncState {
     Idle,
     /// The last cycle failed (will retry).
     Error,
+    /// The session has ended: nothing syncs until the user signs in again.
+    SignedOut,
+    /// The workspace requires two-factor authentication the user hasn't set up.
+    TwoFactorRequired,
+}
+
+/// The state a failed cycle leaves the worker in.
+fn failure_state(e: &anyhow::Error) -> SyncState {
+    // `downcast_ref` also finds a value attached with `.context()`.
+    fn carries<T: std::error::Error + Send + Sync + 'static>(e: &anyhow::Error) -> bool {
+        e.downcast_ref::<T>().is_some() || e.chain().any(|c| c.is::<T>())
+    }
+    if carries::<SignedOut>(e) {
+        SyncState::SignedOut
+    } else if carries::<TwoFactorRequired>(e) {
+        SyncState::TwoFactorRequired
+    } else {
+        SyncState::Error
+    }
+}
+
+/// Fold a step's result into the cycle's state. The failure that only the user
+/// can fix is the one worth reporting.
+fn after(state: SyncState, step: &str, result: Result<()>) -> SyncState {
+    let Err(e) = result else { return state };
+    eprintln!("cloud-sync: {step} failed (will retry): {e:#}");
+    let rank = |s: SyncState| match s {
+        SyncState::Syncing | SyncState::Idle => 0,
+        SyncState::Error => 1,
+        SyncState::TwoFactorRequired => 2,
+        SyncState::SignedOut => 3,
+    };
+    let failed = failure_state(&e);
+    if rank(failed) > rank(state) {
+        failed
+    } else {
+        state
+    }
 }
 
 pub fn start<N, S, C, P>(
@@ -183,12 +269,6 @@ where
     Ok((Arc::new(CloudSync { tx }), worker.run(rx)))
 }
 
-#[derive(Clone)]
-struct Auth {
-    token: String,
-    user_id: String,
-}
-
 struct Worker {
     db: Db,
     config: Config,
@@ -207,12 +287,7 @@ struct Worker {
 impl Worker {
     async fn run(self, mut rx: mpsc::UnboundedReceiver<Op>) {
         (self.status)(SyncState::Syncing);
-        let ok = self
-            .pull()
-            .await
-            .inspect_err(|e| eprintln!("cloud-sync: initial pull failed: {e:#}"))
-            .is_ok();
-        (self.status)(if ok { SyncState::Idle } else { SyncState::Error });
+        (self.status)(after(SyncState::Idle, "initial pull", self.pull().await));
 
         let mut tick = tokio::time::interval(self.config.poll_interval);
         tick.tick().await; // the first tick fires immediately; consume it
@@ -233,16 +308,8 @@ impl Worker {
                     match op {
                         Some(op) => {
                             (self.status)(SyncState::Syncing);
-                            let mut ok = true;
-                            if let Err(e) = self.enqueue(op) {
-                                eprintln!("cloud-sync: enqueue failed: {e:#}");
-                                ok = false;
-                            }
-                            if let Err(e) = self.drain_outbox().await {
-                                eprintln!("cloud-sync: push failed (will retry): {e:#}");
-                                ok = false;
-                            }
-                            (self.status)(if ok { SyncState::Idle } else { SyncState::Error });
+                            let state = after(SyncState::Idle, "enqueue", self.enqueue(op));
+                            (self.status)(after(state, "push", self.drain_outbox().await));
                         }
                         None => break, // every sender dropped → shut down
                     }
@@ -259,16 +326,8 @@ impl Worker {
     /// tick and the realtime nudge.
     async fn sync_cycle(&self) {
         (self.status)(SyncState::Syncing);
-        let mut ok = true;
-        if let Err(e) = self.drain_outbox().await {
-            eprintln!("cloud-sync: push failed (will retry): {e:#}");
-            ok = false;
-        }
-        if let Err(e) = self.pull().await {
-            eprintln!("cloud-sync: pull failed (will retry): {e:#}");
-            ok = false;
-        }
-        (self.status)(if ok { SyncState::Idle } else { SyncState::Error });
+        let state = after(SyncState::Idle, "push", self.drain_outbox().await);
+        (self.status)(after(state, "pull", self.pull().await));
     }
 
     /// Persist an op to the durable outbox so a crash between enqueue and push
@@ -400,6 +459,9 @@ impl Worker {
                 continue;
             }
 
+            // No session means no attempt: the row isn't at fault.
+            self.ensure_auth().await?;
+
             // Push to the row's OWN workspace.
             let result = match (entity.as_str(), op.as_str()) {
                 ("note", "upsert") => self.push_note(&entity_id, &workspace).await,
@@ -430,6 +492,11 @@ impl Worker {
             match result {
                 Ok(()) => {
                     self.db.lock().execute("DELETE FROM sync_outbox WHERE seq = ?1", rusqlite::params![seq])?;
+                }
+                Err(e) if is_permanent_push_error(&e) && self.requires_two_factor(&workspace).await? => {
+                    // Refused because the workspace requires two-factor
+                    // authentication, not because of the payload: keep it.
+                    return Err(e.context(TwoFactorRequired));
                 }
                 Err(e) if is_permanent_push_error(&e) => {
                     // Genuinely un-pushable for this payload (a 4xx allow-listed in
@@ -1243,43 +1310,45 @@ impl Worker {
         if let Some(a) = cached {
             return Ok(a);
         }
-        let a = self.authenticate().await?;
+        let a = self.config.session.token().await?;
         *self.auth.lock() = Some(a.clone());
         Ok(a)
     }
 
-    /// Like `error_for_pb`, but drops the cached auth on a 401 so the next
-    /// operation re-authenticates instead of looping forever on a stale or
-    /// expired token. The current call still errors and retries with fresh
-    /// credentials (pushes via the outbox, pulls on the next tick) — without
-    /// this, an expired token silently wedges sync until the app restarts.
+    /// Like `error_for_pb`, but on a 401 hands the token back to the session so
+    /// the next operation gets a renewed one instead of looping forever on a
+    /// stale or expired token. The current call still errors and retries (pushes
+    /// via the outbox, pulls on the next tick).
     async fn pb_ok(&self, resp: reqwest::Response) -> Result<reqwest::Response> {
         if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
-            *self.auth.lock() = None;
+            if let Some(dead) = self.auth.lock().take() {
+                self.config.session.rejected(&dead.token);
+            }
         }
         error_for_pb(resp).await
     }
 
-    async fn authenticate(&self) -> Result<Auth> {
+    /// Whether `workspace` requires two-factor authentication the user doesn't
+    /// have — then the server refuses every push into it. A server without
+    /// two-factor authentication (404) has no such workspace.
+    async fn requires_two_factor(&self, workspace: &str) -> Result<bool> {
+        let auth = self.ensure_auth().await?;
         let resp = self
             .http
-            .post(format!("{}/api/collections/users/auth-with-password", self.config.base_url))
-            .json(&json!({ "identity": self.config.email, "password": self.config.password }))
+            .get(format!("{}/api/humla/2fa/status", self.config.base_url))
+            .bearer_auth(&auth.token)
             .send()
             .await?;
-        let resp = self.pb_ok(resp).await?;
-
-        #[derive(Deserialize)]
-        struct AuthResp {
-            token: String,
-            record: Rec,
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(false);
         }
-        #[derive(Deserialize)]
-        struct Rec {
-            id: String,
-        }
-        let a: AuthResp = resp.json().await?;
-        Ok(Auth { token: a.token, user_id: a.record.id })
+        let status: serde_json::Value = self.pb_ok(resp).await?.json().await?;
+        let enabled = status.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+        let required = status
+            .get("required_by")
+            .and_then(|v| v.as_array())
+            .is_some_and(|a| a.iter().any(|w| w.get("id").and_then(|v| v.as_str()) == Some(workspace)));
+        Ok(required && !enabled)
     }
 
     fn snapshot_note(&self, uuid: &str) -> Result<Option<NoteRow>> {
@@ -1645,9 +1714,9 @@ async fn error_for_pb(resp: reqwest::Response) -> Result<reqwest::Response> {
 
 /// Best-effort realtime: keep a PocketBase SSE connection open and, on every
 /// record change in a subscribed collection, nudge `notify` to pull. The token
-/// is reused across reconnects (re-auth only on a 401), and reconnects use
-/// exponential backoff capped at 5 minutes — so a persistently-broken realtime
-/// endpoint can't hammer the login endpoint (and trip its rate-limit) every few
+/// is reused across reconnects (handed back to the session only on a 401), and
+/// reconnects use exponential backoff capped at 5 minutes — so a
+/// persistently-broken realtime endpoint can't hammer the server every few
 /// seconds. All failures are non-fatal: the worker's interval poll is the
 /// reliable path; realtime only lowers latency when it's connected.
 async fn realtime_loop(config: Config, http: reqwest::Client, notify: Arc<tokio::sync::Notify>) {
@@ -1655,8 +1724,8 @@ async fn realtime_loop(config: Config, http: reqwest::Client, notify: Arc<tokio:
     let mut token: Option<String> = None;
     loop {
         if token.is_none() {
-            match realtime_auth(&config, &http).await {
-                Ok(t) => token = Some(t),
+            match config.session.token().await {
+                Ok(a) => token = Some(a.token),
                 Err(e) => {
                     eprintln!("cloud-sync: realtime auth failed ({e:#}); polling continues");
                     tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
@@ -1670,7 +1739,8 @@ async fn realtime_loop(config: Config, http: reqwest::Client, notify: Arc<tokio:
         if let Err(e) = realtime_once(&config, &http, &tok, &notify).await {
             eprintln!("cloud-sync: realtime disconnected ({e:#}); polling continues");
             if is_unauthorized(&e) {
-                token = None; // token died → re-auth next round
+                config.session.rejected(&tok);
+                token = None; // token died → renewed next round
             }
         }
         // A connection that stayed up a while was healthy → reset the backoff.
@@ -1680,17 +1750,6 @@ async fn realtime_loop(config: Config, http: reqwest::Client, notify: Arc<tokio:
         tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
         backoff_secs = (backoff_secs * 2).min(300);
     }
-}
-
-/// Authenticate for realtime, returning a token to reuse across reconnects.
-async fn realtime_auth(config: &Config, http: &reqwest::Client) -> Result<String> {
-    let auth = http
-        .post(format!("{}/api/collections/users/auth-with-password", config.base_url))
-        .json(&json!({ "identity": config.email, "password": config.password }))
-        .send()
-        .await?;
-    let auth = error_for_pb(auth).await?.json::<serde_json::Value>().await?;
-    Ok(auth.get("token").and_then(|v| v.as_str()).unwrap_or_default().to_string())
 }
 
 async fn realtime_once(
@@ -1798,11 +1857,39 @@ mod it {
     use super::*;
     use std::time::Duration;
 
+    /// Signs in with a password on every renewal: fine for the seeded test
+    /// user, who has no second factor.
+    struct PasswordSession {
+        base_url: String,
+        email: String,
+        password: String,
+    }
+
+    impl Session for PasswordSession {
+        fn token(&self) -> TokenFuture<'_> {
+            Box::pin(async move {
+                let resp = reqwest::Client::new()
+                    .post(format!("{}/api/collections/users/auth-with-password", self.base_url))
+                    .json(&json!({ "identity": self.email, "password": self.password }))
+                    .send()
+                    .await?;
+                let body = error_for_pb(resp).await?.json::<serde_json::Value>().await?;
+                let s = |p: &str| body.pointer(p).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                Ok(Auth { token: s("/token"), user_id: s("/record/id") })
+            })
+        }
+        fn rejected(&self, _token: &str) {}
+    }
+
     fn env_config() -> Option<Config> {
+        let base_url = std::env::var("HUMLA_TEST_PB_URL").ok()?;
         Some(Config {
-            base_url: std::env::var("HUMLA_TEST_PB_URL").ok()?,
-            email: std::env::var("HUMLA_TEST_EMAIL").ok()?,
-            password: std::env::var("HUMLA_TEST_PASSWORD").ok()?,
+            session: Arc::new(PasswordSession {
+                base_url: base_url.clone(),
+                email: std::env::var("HUMLA_TEST_EMAIL").ok()?,
+                password: std::env::var("HUMLA_TEST_PASSWORD").ok()?,
+            }),
+            base_url,
             workspace_id: std::env::var("HUMLA_TEST_WORKSPACE").ok()?,
             poll_interval: Duration::from_secs(60),
             recordings_dir: std::env::temp_dir(),
@@ -1881,8 +1968,7 @@ mod it {
     fn offline_config(workspace: &str) -> Config {
         Config {
             base_url: String::new(),
-            email: String::new(),
-            password: String::new(),
+            session: FakeSession::signed_in("offline"),
             workspace_id: workspace.to_string(),
             poll_interval: Duration::from_secs(60),
             recordings_dir: std::path::PathBuf::new(),
@@ -2669,5 +2755,192 @@ mod it {
         assert!(after.map(|(_, deleted, _)| deleted).unwrap_or(false), "session tombstoned");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- the session the worker borrows ---------------------------------------
+
+    /// Stands in for the app's session: signed in with `token`, or signed out
+    /// when it has none. Records what the worker asks of it.
+    struct FakeSession {
+        token: Option<String>,
+        asked: std::sync::atomic::AtomicUsize,
+        rejected: Mutex<Vec<String>>,
+    }
+
+    impl FakeSession {
+        fn signed_in(token: &str) -> Arc<Self> {
+            Arc::new(Self { token: Some(token.into()), asked: 0.into(), rejected: Mutex::new(vec![]) })
+        }
+        fn signed_out() -> Arc<Self> {
+            Arc::new(Self { token: None, asked: 0.into(), rejected: Mutex::new(vec![]) })
+        }
+        fn asked(&self) -> usize {
+            self.asked.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl Session for FakeSession {
+        fn token(&self) -> TokenFuture<'_> {
+            self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let token = self.token.clone();
+            Box::pin(async move {
+                match token {
+                    Some(token) => Ok(Auth { token, user_id: "u1".into() }),
+                    None => Err(anyhow::Error::new(SignedOut)),
+                }
+            })
+        }
+        fn rejected(&self, token: &str) {
+            self.rejected.lock().push(token.to_string());
+        }
+    }
+
+    /// A PocketBase stand-in on a local port: `respond(method, path)` answers
+    /// each request, one per connection.
+    async fn fake_server(respond: fn(&str, &str) -> (u16, String)) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { return };
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    // The head, then as much body as it announces.
+                    let head_end = loop {
+                        let n = socket.read(&mut chunk).await.unwrap_or(0);
+                        if n == 0 {
+                            return;
+                        }
+                        buf.extend_from_slice(&chunk[..n]);
+                        if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                            break i + 4;
+                        }
+                    };
+                    let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+                    let length = head
+                        .lines()
+                        .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                        .unwrap_or(0);
+                    while buf.len() < head_end + length {
+                        let n = socket.read(&mut chunk).await.unwrap_or(0);
+                        if n == 0 {
+                            break;
+                        }
+                        buf.extend_from_slice(&chunk[..n]);
+                    }
+                    let mut first = head.lines().next().unwrap_or_default().split(' ');
+                    let method = first.next().unwrap_or_default().to_string();
+                    let path = first.next().unwrap_or_default().to_string();
+                    let (status, body) = respond(&method, &path);
+                    let reply = format!(
+                        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(reply.as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn config_for(base_url: &str, workspace: &str, session: Arc<dyn Session>) -> Config {
+        Config { base_url: base_url.to_string(), session, ..offline_config(workspace) }
+    }
+
+    fn insert_note(db: &Db, id: &str, workspace: &str) {
+        db.lock()
+            .execute(
+                "INSERT INTO notes (id, workspace_id, created_at, updated_at) VALUES (?1, ?2, 1, 1)",
+                rusqlite::params![id, workspace],
+            )
+            .unwrap();
+    }
+
+    fn outbox_attempts(db: &Db, id: &str) -> Option<i64> {
+        db.lock()
+            .query_row("SELECT attempts FROM sync_outbox WHERE entity_id = ?1", rusqlite::params![id], |r| r.get(0))
+            .optional()
+            .unwrap()
+    }
+
+    /// Once the session has ended the worker can't sign in by itself, so it
+    /// stops and says so — and a change made meanwhile stays queued, untouched,
+    /// for when the user signs in again.
+    #[tokio::test]
+    async fn a_signed_out_session_stops_the_push_and_keeps_every_change() {
+        let db = test_db();
+        let w = worker(db.clone(), config_for("http://127.0.0.1:9", "wsA", FakeSession::signed_out()));
+        insert_note(&db, "n1", "wsA");
+        w.enqueue(Op::Note { id: "n1".into(), delete: false }).unwrap();
+
+        let pushed = w.drain_outbox().await;
+        let pulled = w.pull().await;
+
+        assert_eq!(failure_state(&pushed.unwrap_err()), SyncState::SignedOut);
+        assert_eq!(failure_state(&pulled.unwrap_err()), SyncState::SignedOut);
+        assert_eq!(outbox_attempts(&db, "n1"), Some(0), "the change is kept, no attempt spent");
+    }
+
+    /// A token the server refuses goes back to the session, which renews it;
+    /// the worker doesn't keep sending the dead one.
+    #[tokio::test]
+    async fn a_refused_token_is_handed_back_to_the_session() {
+        let base = fake_server(|_, _| (401, r#"{"message":"The request requires valid record authorization token."}"#.into())).await;
+        let session = FakeSession::signed_in("t1");
+        let w = worker(test_db(), config_for(&base, "wsA", session.clone()));
+
+        assert!(w.pull().await.is_err());
+        assert_eq!(*session.rejected.lock(), vec!["t1".to_string()]);
+
+        let _ = w.pull().await;
+        assert_eq!(session.asked(), 2, "the next request asks the session again");
+    }
+
+    /// A workspace that requires two-factor authentication the user doesn't have
+    /// refuses every push as if it were malformed. Dropping those as permanent
+    /// would throw away their edits, so they stay queued until the user enrols.
+    #[tokio::test]
+    async fn a_push_refused_by_a_workspace_that_requires_two_factor_is_kept() {
+        let base = fake_server(|method, path| match (method, path) {
+            ("GET", p) if p.starts_with("/api/humla/2fa/status") => (
+                200,
+                r#"{"available":true,"enabled":false,"recovery_codes_left":0,"required_by":[{"id":"wsA","name":"Acme"}]}"#.into(),
+            ),
+            ("GET", p) if p.starts_with("/api/collections/notes/records") => (200, r#"{"items":[]}"#.into()),
+            _ => (400, r#"{"message":"Failed to create record."}"#.into()),
+        })
+        .await;
+        let db = test_db();
+        let w = worker(db.clone(), config_for(&base, "wsA", FakeSession::signed_in("t1")));
+        insert_note(&db, "n1", "wsA");
+        w.enqueue(Op::Note { id: "n1".into(), delete: false }).unwrap();
+
+        let pushed = w.drain_outbox().await;
+
+        assert_eq!(failure_state(&pushed.unwrap_err()), SyncState::TwoFactorRequired);
+        assert!(outbox_attempts(&db, "n1").is_some(), "the change is kept");
+    }
+
+    /// Without that requirement, a push the server refuses is still dropped.
+    #[tokio::test]
+    async fn a_push_refused_for_any_other_reason_is_still_dropped() {
+        let base = fake_server(|method, path| match (method, path) {
+            ("GET", p) if p.starts_with("/api/humla/2fa/status") => (
+                200,
+                r#"{"available":true,"enabled":false,"recovery_codes_left":0,"required_by":[]}"#.into(),
+            ),
+            ("GET", p) if p.starts_with("/api/collections/notes/records") => (200, r#"{"items":[]}"#.into()),
+            _ => (400, r#"{"message":"Failed to create record."}"#.into()),
+        })
+        .await;
+        let db = test_db();
+        let w = worker(db.clone(), config_for(&base, "wsA", FakeSession::signed_in("t1")));
+        insert_note(&db, "n1", "wsA");
+        w.enqueue(Op::Note { id: "n1".into(), delete: false }).unwrap();
+
+        assert!(w.drain_outbox().await.is_ok());
+        assert_eq!(outbox_attempts(&db, "n1"), None, "dropped as un-pushable");
     }
 }

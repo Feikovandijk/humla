@@ -285,7 +285,7 @@ pub fn notes_set_private(
         // The server refuses a non-author's write too; refusing here keeps the local
         // row from disagreeing with it until the next pull, and keeps a revocation
         // the server will reject out of the outbox, where it would retry forever.
-        if !may_change_visibility(&note.owner, &super::cloud::current_user_id()) {
+        if !may_change_visibility(&note.owner, &super::cloud_auth::current_user_id()) {
             return Err("Only the note's author can change who can read it.".into());
         }
         // Banked BEFORE the no-op check: the default follows what the user CHOSE,

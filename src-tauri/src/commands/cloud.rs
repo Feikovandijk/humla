@@ -7,11 +7,9 @@
 //! separately and is gated by the open-core packaging decision (see the
 //! humla-cloud repo).
 //!
-//! Session model:
-//!  - `cloud_base_url` + `cloud_workspace_id` persist in the settings table.
-//!  - Credentials (email + password) live in the macOS Keychain.
-//!  - A process-lifetime `SESSION` cache holds the auth token + user; it
-//!    auto-logs-in from the stored credentials when a command needs a token.
+//! Session model: `cloud_base_url` + `cloud_workspace_id` persist in the
+//! settings table; the session itself — kept across launches in the Keychain
+//! and renewed there — is `super::cloud_auth`'s.
 //!
 //! Roles are derived from a workspace's relation fields: `owner` (single) =
 //! owner, anyone in `admins` = admin, anyone else in `members` = member.
@@ -20,27 +18,13 @@ use super::err;
 use crate::db;
 use crate::AppState;
 use serde::{Deserialize, Serialize};
-use std::sync::{LazyLock, Mutex};
+use super::cloud_auth::{ensure_session, Session, TwoFactorStatus, WorkspaceRef};
 use tauri::{Manager, State};
 
-const CRED_ACCOUNT: &str = "cloud_credentials";
 // `pub(crate)` so the cloud-sync worker glue (`commands::cloud_worker`) can read
 // the same persisted config keys + credentials instead of duplicating them.
 pub(crate) const SETTING_BASE_URL: &str = "cloud_base_url";
 pub(crate) const SETTING_WORKSPACE: &str = "cloud_workspace_id";
-
-#[derive(Clone, Default)]
-struct Session {
-    token: String,
-    user_id: String,
-    email: String,
-    name: String,
-    verified: bool,
-}
-
-/// Process-lifetime auth cache. Kept out of `AppState` so the whole cloud layer
-/// stays self-contained and easy to extract.
-static SESSION: LazyLock<Mutex<Option<Session>>> = LazyLock::new(|| Mutex::new(None));
 
 #[derive(Serialize, Clone)]
 pub struct CloudUser {
@@ -65,6 +49,8 @@ pub struct CloudWorkspace {
     /// when the server predates per-seat billing or the row carries no usable
     /// count; the UI hides the seat/price rows in that case.
     pub seats: Option<u32>,
+    /// Every member must have two-factor authentication to open it.
+    pub require_2fa: bool,
 }
 
 #[derive(Serialize)]
@@ -91,6 +77,18 @@ pub struct CloudStatus {
     /// (issue #75). `None` on self-host / older servers → the client drops the
     /// add-on pitch entirely.
     pub chat_addon: Option<ChatAddon>,
+    /// The signed-in user's two-factor authentication; unavailable when signed
+    /// out or on a server without it.
+    pub two_factor: TwoFactorStatus,
+    /// Workspaces the user is a member of but can't open until they set up
+    /// two-factor authentication: the server leaves them out of `workspaces`.
+    pub locked_workspaces: Vec<WorkspaceRef>,
+    /// The selected workspace, when it is one of `locked_workspaces` — then
+    /// `current_workspace` is `None` although a workspace is selected.
+    pub locked_current_workspace: Option<WorkspaceRef>,
+    /// Signed out without having signed out: the email of the account whose
+    /// session ended, for the sign-in form to ask them back.
+    pub signed_out_email: Option<String>,
 }
 
 /// The managed chat add-on the server advertises in its billing config (#75).
@@ -160,7 +158,7 @@ fn http() -> reqwest::Client {
 
 // ---- persisted config (settings table) -------------------------------------
 
-fn read_base_url(state: &State<'_, AppState>) -> Option<String> {
+pub(crate) fn read_base_url(state: &State<'_, AppState>) -> Option<String> {
     let conn = state.db.lock();
     db::get_setting(&conn, SETTING_BASE_URL)
         .ok()
@@ -184,67 +182,23 @@ pub(crate) fn active_workspace(conn: &rusqlite::Connection) -> String {
     db::get_setting(conn, SETTING_WORKSPACE).ok().flatten().unwrap_or_default()
 }
 
-/// The signed-in user's PocketBase id, or empty when no session is cached.
-pub(crate) fn current_user_id() -> String {
-    SESSION.lock().unwrap().as_ref().map(|s| s.user_id.clone()).unwrap_or_default()
-}
-
-// ---- credentials (Keychain) ------------------------------------------------
-
-fn cred_entry() -> Result<keyring::Entry, String> {
-    crate::keychain::entry(CRED_ACCOUNT)
-}
-
-pub(crate) fn read_creds() -> Option<(String, String)> {
-    // Dev convenience: in debug builds, take credentials from env vars if set,
-    // skipping the Keychain entirely. `tauri dev` re-signs the binary on every
-    // rebuild, so the macOS Keychain "Always Allow" grant never sticks — and
-    // because the sync worker reads creds at boot, that means a prompt on every
-    // relaunch. Setting HUMLA_DEV_SYNC_EMAIL + HUMLA_DEV_SYNC_PASSWORD avoids it.
-    // Release builds are Developer-ID signed (grant sticks) and always use the
-    // Keychain; the env path is compiled out entirely.
-    #[cfg(debug_assertions)]
-    {
-        let email = std::env::var("HUMLA_DEV_SYNC_EMAIL").unwrap_or_default();
-        let password = std::env::var("HUMLA_DEV_SYNC_PASSWORD").unwrap_or_default();
-        if !email.is_empty() && !password.is_empty() {
-            return Some((email, password));
-        }
-    }
-    let raw = cred_entry().ok()?.get_password().ok()?;
-    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    Some((
-        v.get("email")?.as_str()?.to_string(),
-        v.get("password")?.as_str()?.to_string(),
-    ))
-}
-
-fn write_creds(email: &str, password: &str) -> Result<(), String> {
-    let json = serde_json::json!({ "email": email, "password": password }).to_string();
-    cred_entry()?.set_password(&json).map_err(|e| e.to_string())
-}
-
-fn clear_creds() {
-    if let Ok(entry) = cred_entry() {
-        let _ = entry.delete_credential();
-    }
-}
-
 // ---- HTTP helpers ----------------------------------------------------------
 
 async fn pb_json(resp: reqwest::Response) -> Result<serde_json::Value, String> {
     let status = resp.status();
     if status == reqwest::StatusCode::UNAUTHORIZED {
         // Stale/expired token — drop the cached session so the next command
-        // auto-re-authenticates from the stored credentials (ensure_session)
-        // instead of reusing the dead token.
-        *SESSION.lock().unwrap() = None;
+        // renews it (ensure_session) instead of reusing the dead token.
+        super::cloud_auth::forget_session();
     }
     let val: serde_json::Value = resp
         .json()
         .await
         .map_err(|e| format!("pocketbase: invalid response ({e})"))?;
     if !status.is_success() {
+        if val.get("reason").and_then(|r| r.as_str()) == Some("two_factor_required") {
+            return Err(super::cloud_auth::TWO_FACTOR_REQUIRED.to_string());
+        }
         let msg = val
             .get("message")
             .and_then(|m| m.as_str())
@@ -322,79 +276,6 @@ async fn authed_delete(base: &str, token: &str, path: &str) -> Result<(), String
         .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
         .unwrap_or(body);
     Err(format!("pocketbase {status}: {msg}"))
-}
-
-// ---- auth ------------------------------------------------------------------
-
-async fn login_request(base: &str, email: &str, password: &str) -> Result<Session, String> {
-    let resp = http()
-        .post(format!("{base}/api/collections/users/auth-with-password"))
-        .json(&serde_json::json!({ "identity": email, "password": password }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    let val = pb_json(resp)
-        .await
-        .map_err(|e| format!("login failed — check the server URL, email, and password ({e})"))?;
-    let token = val.get("token").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-    let record = val.get("record");
-    Ok(Session {
-        token,
-        user_id: record.and_then(|r| r.get("id")).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        email: record.and_then(|r| r.get("email")).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        name: record.and_then(|r| r.get("name")).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        verified: record.and_then(|r| r.get("verified")).and_then(|v| v.as_bool()).unwrap_or(false),
-    })
-}
-
-/// Refresh the signed-in user's record (to pick up `verified` after they click
-/// the email link) and rotate the auth token. Best-effort, used by `cloud_status`.
-async fn auth_refresh(base: &str, token: &str) -> Result<Session, String> {
-    let resp = http()
-        .post(format!("{base}/api/collections/users/auth-refresh"))
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    let val = pb_json(resp).await?;
-    let new_token = val.get("token").and_then(|v| v.as_str()).unwrap_or(token).to_string();
-    let record = val.get("record");
-    Ok(Session {
-        token: new_token,
-        user_id: record.and_then(|r| r.get("id")).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        email: record.and_then(|r| r.get("email")).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        name: record.and_then(|r| r.get("name")).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        verified: record.and_then(|r| r.get("verified")).and_then(|v| v.as_bool()).unwrap_or(false),
-    })
-}
-
-/// Return a usable (base_url, session). Uses the cached session, else
-/// auto-logs-in from stored credentials.
-async fn ensure_session(state: &State<'_, AppState>) -> Result<(String, Session), String> {
-    let base = read_base_url(state).ok_or("Cloud isn't configured — set the server URL first.")?;
-    let cached = SESSION.lock().unwrap().clone();
-    if let Some(s) = cached {
-        return Ok((base, s));
-    }
-    let (email, password) = read_creds().ok_or("Not signed in.")?;
-    let session = login_request(&base, &email, &password).await?;
-    *SESSION.lock().unwrap() = Some(session.clone());
-    Ok((base, session))
-}
-
-/// Cloud `(base_url, auth token)` for a command that calls the server directly
-/// (Teams chat, issue #50). Reuses the cached session and the auto-login-from-
-/// Keychain path. The token may be stale — a 401 from the endpoint should call
-/// [`forget_session`] and retry once, mirroring `pb_json`'s reactive refresh.
-pub(crate) async fn cloud_session(state: &State<'_, AppState>) -> Result<(String, String), String> {
-    let (base, session) = ensure_session(state).await?;
-    Ok((base, session.token))
-}
-
-/// Drop the cached session so the next [`cloud_session`] re-authenticates from
-/// stored credentials — call after a 401 from a direct endpoint call.
-pub(crate) fn forget_session() {
-    *SESSION.lock().unwrap() = None;
 }
 
 // ---- direct endpoint requests (chat service + hook routes) ------------------
@@ -505,7 +386,9 @@ async fn request_json(
 ) -> Result<serde_json::Value, CloudReqError> {
     let mut attempt = 0u8;
     loop {
-        let (base, token) = cloud_session(state).await.map_err(CloudReqError::Unreachable)?;
+        let (base, token) = super::cloud_auth::cloud_session(state)
+            .await
+            .map_err(CloudReqError::Unreachable)?;
         let url = format!("{}{}", base.trim_end_matches('/'), path);
         let req = match request {
             Request::Get(q) => http().get(url).query(q),
@@ -521,7 +404,7 @@ async fn request_json(
         let status = resp.status();
         if status == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
             // Stale token — drop the cached session and retry once with a fresh one.
-            forget_session();
+            super::cloud_auth::forget_session();
             attempt += 1;
             continue;
         }
@@ -651,6 +534,7 @@ async fn list_workspaces_inner(base: &str, session: &Session) -> Result<Vec<Clou
                 role: derive_role(it, &session.user_id),
                 plan_status,
                 seats,
+                require_2fa: it.get("require_2fa").and_then(|v| v.as_bool()).unwrap_or(false),
             }
         })
         .collect())
@@ -728,7 +612,13 @@ pub async fn cloud_status(state: State<'_, AppState>) -> Result<CloudStatus, Str
     let configured = base.is_some();
     let base_url = base.clone().unwrap_or_default();
 
-    let Some((base_url, session)) = ensure_session(&state).await.ok() else {
+    // The record is read again each time: `verified` changes when the user
+    // clicks the email link.
+    let session = super::cloud_auth::fresh_session(&state).await;
+    // Only a session that ended asks the user back; an unreachable server says
+    // nothing about the one in the Keychain.
+    let ended = matches!(session, Err(super::cloud_auth::SessionError::SignedOut(_)));
+    let Ok((base_url, session)) = session else {
         return Ok(CloudStatus {
             configured,
             logged_in: false,
@@ -740,21 +630,21 @@ pub async fn cloud_status(state: State<'_, AppState>) -> Result<CloudStatus, Str
             seat_price_cents: None,
             seat_currency: None,
             chat_addon: None,
+            two_factor: TwoFactorStatus::default(),
+            locked_workspaces: vec![],
+            locked_current_workspace: None,
+            signed_out_email: (configured && ended)
+                .then(|| super::cloud_auth::signed_out_email(&state.keychain_cache))
+                .flatten(),
         });
     };
 
-    // The cached session's `verified` can be stale (the user may have clicked the
-    // verification link since login). Refresh the record + rotate the token,
-    // best-effort — fall back to the cached session on any failure.
-    let session = match auth_refresh(&base_url, &session.token).await {
-        Ok(s) => {
-            *SESSION.lock().unwrap() = Some(s.clone());
-            s
-        }
-        Err(_) => session,
-    };
-
-    let workspaces = match list_workspaces_inner(&base_url, &session).await {
+    let (workspaces, billing, two_factor) = tokio::join!(
+        list_workspaces_inner(&base_url, &session),
+        fetch_billing_config(&base_url),
+        super::cloud_auth::fetch_two_factor_status(&base_url, &session.token),
+    );
+    let workspaces = match workspaces {
         Ok(ws) => ws,
         // Don't crash status on a transient list failure, but don't swallow it
         // silently either — an empty list reads as "no workspaces" and hid a 400
@@ -768,8 +658,12 @@ pub async fn cloud_status(state: State<'_, AppState>) -> Result<CloudStatus, Str
     let current_workspace = current_id
         .as_ref()
         .and_then(|id| workspaces.iter().find(|w| &w.id == id).cloned());
+    let visible: Vec<&str> = workspaces.iter().map(|w| w.id.as_str()).collect();
+    let locked_workspaces = super::cloud_auth::locked_workspaces(&two_factor, &visible);
+    let locked_current_workspace = current_id
+        .as_ref()
+        .and_then(|id| locked_workspaces.iter().find(|w| &w.id == id).cloned());
 
-    let billing = fetch_billing_config(&base_url).await;
     Ok(CloudStatus {
         configured: true,
         logged_in: true,
@@ -786,6 +680,10 @@ pub async fn cloud_status(state: State<'_, AppState>) -> Result<CloudStatus, Str
         seat_price_cents: billing.seat_price_cents,
         seat_currency: billing.seat_currency,
         chat_addon: billing.chat_addon,
+        two_factor,
+        locked_workspaces,
+        locked_current_workspace,
+        signed_out_email: None,
     })
 }
 
@@ -844,24 +742,9 @@ pub fn cloud_configure(state: State<'_, AppState>, base_url: String) -> Result<(
         let conn = state.db.lock();
         db::set_setting(&conn, SETTING_BASE_URL, &trimmed).map_err(err)?;
     }
-    *SESSION.lock().unwrap() = None; // a server change invalidates any session
+    super::cloud_auth::server_changed(&state);
     state.sync.config_changed();
     Ok(())
-}
-
-#[tauri::command]
-pub async fn cloud_login(
-    state: State<'_, AppState>,
-    email: String,
-    password: String,
-) -> Result<CloudStatus, String> {
-    let base = read_base_url(&state)
-        .ok_or("Cloud isn't configured — set the server URL first.")?;
-    let session = login_request(&base, email.trim(), &password).await?;
-    write_creds(email.trim(), &password)?;
-    *SESSION.lock().unwrap() = Some(session);
-    state.sync.config_changed(); // creds now present → start the sync worker
-    cloud_status(state).await
 }
 
 /// Create a new account on the configured server, then sign in. Public sign-up
@@ -913,10 +796,8 @@ pub async fn cloud_signup(
         return Err(msg.to_string());
     }
 
-    // Account created → sign in and persist credentials, mirroring cloud_login.
-    let session = login_request(&base, email, &password).await?;
-    write_creds(email, &password)?;
-    *SESSION.lock().unwrap() = Some(session);
+    // Account created → sign in and keep the session, as cloud_login does.
+    super::cloud_auth::sign_in_new_account(&state, &base, email, &password).await?;
     state.sync.config_changed();
     cloud_status(state).await
 }
@@ -971,9 +852,8 @@ pub async fn cloud_request_password_reset(
 
 #[tauri::command]
 pub fn cloud_logout(state: State<'_, AppState>) -> Result<(), String> {
-    clear_creds();
+    super::cloud_auth::sign_out(&state);
     clear_all_roster_caches(&state); // no cached names survive sign-out (#116 / ADR-0002)
-    *SESSION.lock().unwrap() = None;
     state.sync.config_changed(); // creds gone → stop the sync worker
     Ok(())
 }
@@ -1002,7 +882,14 @@ pub async fn cloud_create_workspace(
     }
     state.sync.config_changed(); // new workspace selected → (re)start the worker
     // A freshly created workspace has no subscription yet → no seat count.
-    Ok(CloudWorkspace { id, name, role: "owner".into(), plan_status: "none".into(), seats: None })
+    Ok(CloudWorkspace {
+        id,
+        name,
+        role: "owner".into(),
+        plan_status: "none".into(),
+        seats: None,
+        require_2fa: false,
+    })
 }
 
 #[tauri::command]

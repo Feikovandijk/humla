@@ -49,6 +49,7 @@ import { TranscriptionStep } from "./pages/onboarding/steps/Transcription";
 import { STEP_ORDER, type StepContext, type StepId } from "./pages/onboarding/types";
 import type { DiarizeEngine, ProviderConfig, RecordingStatus, Step, TimelineEntry } from "./lib/ipc";
 import { DEMO_CLIENTS, DEMO_FOLDERS, demoNotes } from "./test/noteLibrary";
+import { DEMO_RECOVERY_CODES, DEMO_TWO_FACTOR_SETUP } from "./test/twoFactorFixtures";
 // Mirrors src/main.tsx — every theme's typeface, so a scenario reviewed under
 // `?palette=<id>` renders in that design's face rather than falling back.
 import "@fontsource/hanken-grotesk/400.css";
@@ -1648,6 +1649,38 @@ const CASES: Record<string, Scenario> = {
     },
   },
 
+  // --- Two-factor authentication. Settings → Account, signed in to a
+  // workspace you administer. `-off` also has a workspace waiting for it, so the
+  // switcher's locked row and the section's notice show; click "Turn on…" for
+  // the setup dialog. `-on` has a workspace requiring it, which holds "Turn off"
+  // back. `-sign-in` answers the password with the code step.
+  "two-factor-off": {
+    route: "/settings?tab=account",
+    render: () => null, // unused — `route` renders the app
+    ipc: twoFactorIpc(false),
+  },
+  "two-factor-on": {
+    route: "/settings?tab=account",
+    render: () => null, // unused — `route` renders the app
+    ipc: twoFactorIpc(true),
+  },
+  "two-factor-sign-in": {
+    route: "/settings?tab=account",
+    render: () => null, // unused — `route` renders the app
+    ipc: {
+      cloud_status: () => ({
+        ...DISCONNECTED,
+        configured: true,
+        base_url: "https://sync.humla.team",
+        signed_out_email: "m@example.no",
+      }),
+      cloud_login: () => ({ step: "two_factor" }),
+      cloud_verify_two_factor: () => {
+        throw { reason: "invalid_code", message: "That code isn't right." };
+      },
+    },
+  },
+
   // --- Themes: the token-driven chrome on one page, so a theme can be judged
   // as a design rather than as a diff. Combine with ?palette= and ?theme=.
   themes: {
@@ -1656,6 +1689,44 @@ const CASES: Record<string, Scenario> = {
     ipc: {},
   },
 };
+
+function twoFactorIpc(enabled: boolean) {
+  const acme: CloudWorkspace = {
+    id: "w1",
+    name: "Acme",
+    role: "admin",
+    plan_status: "active",
+    require_2fa: enabled,
+  };
+  const secure = { id: "w9", name: "Secure Co" };
+  return {
+    cloud_status: () => ({
+      ...DISCONNECTED,
+      configured: true,
+      logged_in: true,
+      base_url: "https://sync.humla.team",
+      user: { id: "u1", email: "m@example.no", name: "Michael", verified: true },
+      current_workspace: acme,
+      workspaces: [acme],
+      two_factor: {
+        available: true,
+        enabled,
+        recovery_codes_left: enabled ? 7 : 0,
+        required_by: enabled ? [{ id: "w1", name: "Acme" }] : [secure],
+      },
+      locked_workspaces: enabled ? [] : [secure],
+    }),
+    cloud_workspace_members: () => [
+      { id: "u1", email: "m@example.no", name: "Michael", role: "admin" },
+      { id: "u2", email: "ola@example.no", name: "Ola Nordmann", role: "member" },
+      { id: "u3", email: "kari@example.no", name: "Kari", role: "owner" },
+    ],
+    cloud_two_factor_members: () => ({ u1: enabled, u2: false, u3: true }),
+    cloud_two_factor_setup: () => DEMO_TWO_FACTOR_SETUP,
+    cloud_two_factor_enable: () => DEMO_RECOVERY_CODES,
+    cloud_two_factor_recovery_codes: () => DEMO_RECOVERY_CODES,
+  };
+}
 
 const params = new URLSearchParams(location.search);
 const which = params.get("case") ?? "recommended";

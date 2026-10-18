@@ -2135,14 +2135,14 @@ async fn chat_send_cloud(
     let turn_cancel = TurnCancel::register(&state, target.scope_id());
     let mut attempt = 0u8;
     let outcome = loop {
-        let (base, token) = super::cloud::cloud_session(&state).await?;
+        let (base, token) = super::cloud_auth::cloud_session(&state).await?;
         let turn =
             stream_cloud_turn(&app, &base, &token, &body, &conversation.id, turn_cancel.flag())
                 .await;
         match turn {
             Ok(t) => {
                 if matches!(&t.preflight, Some((401, _, _))) && attempt == 0 {
-                    super::cloud::forget_session();
+                    super::cloud_auth::forget_session();
                     attempt += 1;
                     continue;
                 }

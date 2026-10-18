@@ -1,6 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Cloud, CloudOff, LogOut } from "lucide-react";
 import { cloudApi, useCloudStore, HUMLA_CLOUD_URL } from "../../../lib/cloud";
+import { useCloudSignIn } from "../../../lib/useCloudSignIn";
+import { TwoFactorCodeForm } from "../../../components/TwoFactorCodeForm";
+import { TwoFactorSection } from "./TwoFactor";
 import { Row, Section } from "../components/Section";
 import { Btn } from "../components/Btn";
 import { ValuePill } from "../components/ValuePill";
@@ -27,6 +30,14 @@ export function AccountTab({ s, update }: Pick<SettingsHook, "s" | "update">) {
   const [error, setError] = useState<string | null>(null);
   const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
   const [resetMsg, setResetMsg] = useState<string | null>(null);
+  const auth = useCloudSignIn();
+
+  // A session that ended by itself names its account, so the form can ask the
+  // user back without them retyping it. Status arrives after the first render.
+  const signedOutEmail = status.signed_out_email;
+  useEffect(() => {
+    if (signedOutEmail) setEmail((current) => current || signedOutEmail);
+  }, [signedOutEmail]);
 
   async function connect() {
     setBusy(true);
@@ -59,31 +70,11 @@ export function AccountTab({ s, update }: Pick<SettingsHook, "s" | "update">) {
   }
 
   async function signIn() {
-    setBusy(true);
-    setError(null);
-    try {
-      await cloudApi.login(email.trim(), password);
-      setPassword("");
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
+    if (await auth.signIn(email.trim(), password)) setPassword("");
   }
 
   async function signUp() {
-    setBusy(true);
-    setError(null);
-    try {
-      await cloudApi.signup(email.trim(), password, name.trim());
-      setPassword("");
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
+    if (await auth.signUp(email.trim(), password, name.trim())) setPassword("");
   }
 
   async function resendVerification() {
@@ -146,63 +137,83 @@ export function AccountTab({ s, update }: Pick<SettingsHook, "s" | "update">) {
   // rendered below this one — not duplicated here.)
   if (status.logged_in && status.user) {
     return (
-      <Section title="Account">
-        <div className="flex items-center justify-between gap-3 py-3.5">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="shrink-0 grid place-items-center w-10 h-10 rounded-full bg-[var(--color-pill-hover)] text-[var(--color-text-muted)]">
-              <Cloud size={18} strokeWidth={1.5} />
-            </div>
-            <div className="min-w-0">
-              <div className="text-sm truncate">{status.user.name || status.user.email}</div>
-              <div className="text-xs text-[var(--color-text-muted)] truncate">{status.user.email}</div>
-            </div>
-          </div>
-          <Btn onClick={signOut} disabled={busy}>
-            <span className="inline-flex items-center gap-1.5">
-              <LogOut size={14} strokeWidth={1.5} /> Sign out
-            </span>
-          </Btn>
-        </div>
-        {!status.user.verified && (
-          <div className="py-3.5">
-            <div className="rounded-md border border-[var(--color-warning)] bg-[var(--color-pill-hover)] px-3 py-2 text-xs flex flex-col gap-2">
-              <div>
-                <span style={{ color: "var(--color-warning)" }}>⚠</span>{" "}
-                Your email isn't verified yet. Check your inbox for the verification link — pending
-                team invites only take effect once you verify.
+      <>
+        <Section title="Account">
+          <div className="flex items-center justify-between gap-3 py-3.5">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="shrink-0 grid place-items-center w-10 h-10 rounded-full bg-[var(--color-pill-hover)] text-[var(--color-text-muted)]">
+                <Cloud size={18} strokeWidth={1.5} />
               </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <Btn onClick={resendVerification} disabled={busy}>
-                  {busy ? "Sending…" : "Resend verification email"}
-                </Btn>
-                {verifyMsg && <span className="text-[var(--color-text-muted)]">{verifyMsg}</span>}
+              <div className="min-w-0">
+                <div className="text-sm truncate">{status.user.name || status.user.email}</div>
+                <div className="text-xs text-[var(--color-text-muted)] truncate">{status.user.email}</div>
               </div>
             </div>
-          </div>
-        )}
-        <Row label="Server" control={<ValuePill>{status.base_url}</ValuePill>} />
-        <Row
-          label="Upload recording audio"
-          description="Send each recording's audio to its workspace note so teammates can play it back. Transcripts and summaries always sync; turning this off keeps the audio itself on your Mac. Personal notes never leave the device either way."
-          control={
-            <Toggle
-              label="Upload recording audio"
-              checked={s.sync_audio !== "false"}
-              onChange={(on) => update("sync_audio", on ? "true" : "false")}
-            />
-          }
-        />
-        <Row
-          label="Disconnect server"
-          description="Forget this server and sign out. Cloud sync is opt-in — your notes always live locally first."
-          control={
-            <Btn onClick={disconnect} disabled={busy} aria-label="Disconnect server">
+            <Btn onClick={signOut} disabled={busy}>
               <span className="inline-flex items-center gap-1.5">
-                <CloudOff size={14} strokeWidth={1.5} /> Disconnect
+                <LogOut size={14} strokeWidth={1.5} /> Sign out
               </span>
             </Btn>
-          }
-        />
+          </div>
+          {!status.user.verified && (
+            <div className="py-3.5">
+              <div className="rounded-md border border-[var(--color-warning)] bg-[var(--color-pill-hover)] px-3 py-2 text-xs flex flex-col gap-2">
+                <div>
+                  <span style={{ color: "var(--color-warning)" }}>⚠</span>{" "}
+                  Your email isn't verified yet. Check your inbox for the verification link — pending
+                  team invites only take effect once you verify.
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Btn onClick={resendVerification} disabled={busy}>
+                    {busy ? "Sending…" : "Resend verification email"}
+                  </Btn>
+                  {verifyMsg && <span className="text-[var(--color-text-muted)]">{verifyMsg}</span>}
+                </div>
+              </div>
+            </div>
+          )}
+          <Row label="Server" control={<ValuePill>{status.base_url}</ValuePill>} />
+          <Row
+            label="Upload recording audio"
+            description="Send each recording's audio to its workspace note so teammates can play it back. Transcripts and summaries always sync; turning this off keeps the audio itself on your Mac. Personal notes never leave the device either way."
+            control={
+              <Toggle
+                label="Upload recording audio"
+                checked={s.sync_audio !== "false"}
+                onChange={(on) => update("sync_audio", on ? "true" : "false")}
+              />
+            }
+          />
+          <Row
+            label="Disconnect server"
+            description="Forget this server and sign out. Cloud sync is opt-in — your notes always live locally first."
+            control={
+              <Btn onClick={disconnect} disabled={busy} aria-label="Disconnect server">
+                <span className="inline-flex items-center gap-1.5">
+                  <CloudOff size={14} strokeWidth={1.5} /> Disconnect
+                </span>
+              </Btn>
+            }
+          />
+        </Section>
+        <TwoFactorSection />
+      </>
+    );
+  }
+
+  // Signing in, second step: the code from the authenticator app ------------
+  if (status.configured && auth.step === "code") {
+    return (
+      <Section title="Two-factor authentication">
+        <Row label="Server" control={<ValuePill>{status.base_url}</ValuePill>} />
+        <div className="py-3.5">
+          <TwoFactorCodeForm
+            busy={auth.busy}
+            error={auth.error}
+            onSubmit={(factor) => void auth.verify(factor).then((ok) => ok && setPassword(""))}
+            onBack={auth.back}
+          />
+        </div>
       </Section>
     );
   }
@@ -214,10 +225,16 @@ export function AccountTab({ s, update }: Pick<SettingsHook, "s" | "update">) {
     const canSubmit = !!email.trim() && !!password && (!isSignup || !!name.trim());
     const toggleMode = () => {
       setMode(isSignup ? "signin" : "signup");
-      setError(null);
+      auth.setError(null);
     };
+    const formBusy = busy || auth.busy;
     return (
       <Section title={isSignup ? "Create account" : "Sign in"}>
+        {!isSignup && signedOutEmail && (
+          <div className="py-3.5 text-xs text-[var(--color-text-muted)]">
+            Your session has ended. Sign in again to keep syncing.
+          </div>
+        )}
         <Row label="Server" control={<ValuePill>{status.base_url}</ValuePill>} />
         {isSignup && (
           <Row label="Name">
@@ -237,12 +254,14 @@ export function AccountTab({ s, update }: Pick<SettingsHook, "s" | "update">) {
             placeholder={isSignup ? "At least 8 characters" : "••••••••"} />
         </Row>
         <div className="py-3.5 flex flex-col gap-3">
-          {error && <div className="text-xs text-[var(--color-danger)]">{error}</div>}
+          {(auth.error || error) && (
+            <div className="text-xs text-[var(--color-danger)]">{auth.error || error}</div>
+          )}
           <div className="flex gap-2">
-            <Btn onClick={submit} disabled={busy || !canSubmit}>
-              {busy ? (isSignup ? "Creating…" : "Signing in…") : isSignup ? "Create account" : "Sign in"}
+            <Btn onClick={submit} disabled={formBusy || !canSubmit}>
+              {auth.busy ? (isSignup ? "Creating…" : "Signing in…") : isSignup ? "Create account" : "Sign in"}
             </Btn>
-            <Btn onClick={disconnect} disabled={busy}>Change server</Btn>
+            <Btn onClick={disconnect} disabled={formBusy}>Change server</Btn>
           </div>
           <div className="flex items-center gap-4">
             <button type="button" onClick={toggleMode}

@@ -108,6 +108,8 @@ impl Manager {
                     cloud_sync::SyncState::Syncing => "syncing",
                     cloud_sync::SyncState::Idle => "idle",
                     cloud_sync::SyncState::Error => "error",
+                    cloud_sync::SyncState::SignedOut => "signed_out",
+                    cloud_sync::SyncState::TwoFactorRequired => "two_factor_required",
                 };
                 let _ = app_status.emit("sync_status", s);
             },
@@ -151,9 +153,8 @@ impl Manager {
         self.running.lock().handle.clone()
     }
 
-    /// Assemble a `cloud_sync::Config` from persisted settings + Keychain creds,
-    /// or `None` if any piece is missing/empty. Reuses [`super::cloud`]'s keys
-    /// and credential reader so there's one source of truth.
+    /// Assemble a `cloud_sync::Config` from persisted settings and the app's
+    /// session, or `None` if any piece is missing/empty — signed out included.
     fn read_config(&self) -> Option<cloud_sync::Config> {
         let (base_url, workspace_id) = {
             let conn = self.db.lock();
@@ -164,7 +165,9 @@ impl Manager {
         if base_url.is_empty() || workspace_id.is_empty() {
             return None;
         }
-        let (email, password) = super::cloud::read_creds()?;
+        if !super::cloud_auth::has_credentials(&self.app.state::<crate::AppState>().keychain_cache) {
+            return None;
+        }
         // Where session-metadata pushes read each note's sessions.json manifest.
         // A missing app-data dir is unexpected but non-fatal for the rest of
         // sync, so fall back to an empty path (session pushes then just no-op).
@@ -176,12 +179,35 @@ impl Manager {
             .unwrap_or_default();
         Some(cloud_sync::Config {
             base_url,
-            email,
-            password,
+            session: Arc::new(AppSession { app: self.app.clone() }),
             workspace_id,
             poll_interval: POLL_INTERVAL,
             recordings_dir,
         })
+    }
+}
+
+/// The app's one session (`super::cloud_auth`), lent to the worker.
+struct AppSession {
+    app: AppHandle,
+}
+
+impl cloud_sync::Session for AppSession {
+    fn token(&self) -> cloud_sync::TokenFuture<'_> {
+        Box::pin(async move {
+            let state = self.app.state::<crate::AppState>();
+            match super::cloud_auth::ensure_session(&state).await {
+                Ok((_, s)) => Ok(cloud_sync::Auth { token: s.token, user_id: s.user_id }),
+                Err(super::cloud_auth::SessionError::SignedOut(_)) => {
+                    Err(anyhow::Error::new(cloud_sync::SignedOut))
+                }
+                Err(super::cloud_auth::SessionError::Unreachable(e)) => Err(anyhow::anyhow!(e)),
+            }
+        })
+    }
+
+    fn rejected(&self, token: &str) {
+        super::cloud_auth::forget_session_token(token);
     }
 }
 

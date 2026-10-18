@@ -19,6 +19,8 @@ import {
 import { billingCta, planIsLive, useCheckout } from "../lib/billing";
 import type { CheckoutSource } from "../lib/cloud";
 import { useNotesStore } from "../lib/store";
+import { useCloudSignIn } from "../lib/useCloudSignIn";
+import { TwoFactorCodeForm } from "./TwoFactorCodeForm";
 import { Modal } from "../pages/settings/components/Modal";
 
 // Creating a workspace, end to end, in one sheet.
@@ -237,31 +239,40 @@ function ConnectStage({ onClose }: { onClose: () => void }) {
 
 function AuthStage() {
   const status = useCloudStore((s) => s.status);
-  const refresh = useCloudStore((s) => s.refresh);
+  const auth = useCloudSignIn();
   const [mode, setMode] = useState<"signin" | "signup">("signup");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error } = auth;
 
   const isSignup = mode === "signup";
   const canSubmit = !!email.trim() && !!password && (!isSignup || !!name.trim());
 
   async function submit() {
     if (!canSubmit) return;
-    setBusy(true);
-    setError(null);
-    try {
-      if (isSignup) await cloudApi.signup(email.trim(), password, name.trim());
-      else await cloudApi.login(email.trim(), password);
-      setPassword("");
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
+    const signedIn = isSignup
+      ? await auth.signUp(email.trim(), password, name.trim())
+      : await auth.signIn(email.trim(), password);
+    if (signedIn) setPassword("");
+  }
+
+  if (auth.step === "code") {
+    return (
+      <Body>
+        <Head
+          title="Two-factor authentication"
+          blurb="Your account asks for a second step when you sign in."
+        />
+        <TwoFactorCodeForm
+          busy={busy}
+          error={error}
+          inputClassName={inputCls}
+          onSubmit={(factor) => void auth.verify(factor).then((ok) => ok && setPassword(""))}
+          onBack={auth.back}
+        />
+      </Body>
+    );
   }
 
   return (
@@ -337,7 +348,7 @@ function AuthStage() {
           type="button"
           onClick={() => {
             setMode(isSignup ? "signin" : "signup");
-            setError(null);
+            auth.setError(null);
           }}
           className="text-xs text-[var(--color-interactive)] hover:underline"
         >

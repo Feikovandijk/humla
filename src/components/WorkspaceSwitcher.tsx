@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Check, ChevronsUpDown, Cloud, CloudOff, Plus, RefreshCw, User, Users } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Check, ChevronsUpDown, Cloud, CloudOff, Lock, Plus, RefreshCw, User, Users } from "lucide-react";
 import {
   cloudApi,
   roleLabel,
@@ -19,6 +20,16 @@ function SyncIndicator({ status }: { status: SyncStatus }) {
     syncing: { Icon: RefreshCw, cls: "animate-spin text-[var(--color-text-muted)]", title: "Syncing…" },
     idle: { Icon: Cloud, cls: "text-[var(--color-success)]", title: "Synced" },
     error: { Icon: CloudOff, cls: "text-[var(--color-danger)]", title: "Sync error — will retry" },
+    signed_out: {
+      Icon: CloudOff,
+      cls: "text-[var(--color-warning)]",
+      title: "Signed out — sign in again to sync",
+    },
+    two_factor_required: {
+      Icon: Lock,
+      cls: "text-[var(--color-warning)]",
+      title: "This workspace requires two-factor authentication",
+    },
   }[status];
   const { Icon } = map;
   return (
@@ -48,6 +59,19 @@ function RolePill({ role }: { role: CloudRole }) {
 // — Personal is a deliberate choice, not a lesser tier, and calling it lesser
 // cuts against the local-first pitch.
 function AddTeamPill({ onActivate }: { onActivate: () => void }) {
+  return <TriggerPill label="Add team" title="Sync notes across your team" onActivate={onActivate} />;
+}
+
+// A pill in the trigger row that acts on its own instead of opening the menu.
+function TriggerPill({
+  label,
+  title,
+  onActivate,
+}: {
+  label: string;
+  title: string;
+  onActivate: () => void;
+}) {
   // This sits INSIDE the menu trigger, which opens the dropdown on
   // pointerdown — so swallowing the click alone would still leave the menu
   // hanging open behind the sheet.
@@ -60,7 +84,7 @@ function AddTeamPill({ onActivate }: { onActivate: () => void }) {
     <span
       role="button"
       tabIndex={0}
-      title="Sync notes across your team"
+      title={title}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={activate}
       onKeyDown={(e) => {
@@ -69,7 +93,7 @@ function AddTeamPill({ onActivate }: { onActivate: () => void }) {
       }}
       className={`${PILL_CLS} cursor-pointer hover:text-[var(--color-text)] hover:border-[var(--color-text-muted)] transition-colors`}
     >
-      Add team
+      {label}
     </span>
   );
 }
@@ -84,6 +108,7 @@ export function WorkspaceSwitcher() {
   const syncStatus = useCloudStore((s) => s.syncStatus);
   const refreshCloud = useCloudStore((s) => s.refresh);
   const refreshNotes = useNotesStore((s) => s.refresh);
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [creatingOpen, setCreatingOpen] = useState(false);
   // Both entrances open the same sheet; only the attribution differs, and that
@@ -96,7 +121,14 @@ export function WorkspaceSwitcher() {
   }
 
   const current = status.current_workspace;
-  const label = current?.name ?? "Personal";
+  // A selected workspace that requires two-factor authentication the user lacks
+  // is hidden from `workspaces`, but it is still the one selected.
+  const lockedCurrent = current ? null : (status.locked_current_workspace ?? null);
+  const label = current?.name ?? lockedCurrent?.name ?? "Personal";
+  const locked = status.logged_in ? (status.locked_workspaces ?? []) : [];
+  // The session ended without the user signing out: nothing syncs until they
+  // sign in again, so the switcher says so.
+  const sessionEnded = !status.logged_in && !!status.signed_out_email;
 
   async function select(id: string) {
     try {
@@ -120,12 +152,24 @@ export function WorkspaceSwitcher() {
           className="no-drag w-full flex items-center gap-2 px-2 h-9 rounded-md text-sm border border-[var(--color-line)] bg-[var(--color-surface)] hover:border-[var(--color-text-muted)] transition-colors"
         >
           <span className="shrink-0 grid place-items-center w-5 h-5 rounded bg-[var(--color-pill-hover)] text-[var(--color-text-muted)]">
-            {current ? <Users size={13} strokeWidth={1.5} /> : <User size={13} strokeWidth={1.5} />}
+            {lockedCurrent ? (
+              <Lock size={13} strokeWidth={1.5} />
+            ) : current ? (
+              <Users size={13} strokeWidth={1.5} />
+            ) : (
+              <User size={13} strokeWidth={1.5} />
+            )}
           </span>
           <span className="flex-1 min-w-0 text-left truncate">{label}</span>
           {current && syncStatus && <SyncIndicator status={syncStatus} />}
           {current ? (
             <RolePill role={current.role} />
+          ) : lockedCurrent ? null : sessionEnded ? (
+            <TriggerPill
+              label="Sign in"
+              title="Your session has ended. Sign in again to keep syncing."
+              onActivate={() => navigate("/settings?tab=account")}
+            />
           ) : (
             <AddTeamPill onActivate={() => startCreating("team_hint_switcher")} />
           )}
@@ -140,10 +184,10 @@ export function WorkspaceSwitcher() {
           <MenuItem className="px-2" onSelect={() => select("")}>
             <User size={14} strokeWidth={1.5} className="shrink-0 text-[var(--color-text-muted)]" />
             <span className="flex-1 min-w-0 truncate">Personal</span>
-            {!current && <Check size={14} strokeWidth={1.5} className="shrink-0" />}
+            {!current && !lockedCurrent && <Check size={14} strokeWidth={1.5} className="shrink-0" />}
           </MenuItem>
 
-          {status.logged_in && status.workspaces.length > 0 && (
+          {status.logged_in && status.workspaces.length + locked.length > 0 && (
             <>
               <MenuLabel className="pt-2 pb-1">Workspaces</MenuLabel>
               {status.workspaces.map((w) => (
@@ -152,6 +196,24 @@ export function WorkspaceSwitcher() {
                   <span className="flex-1 min-w-0 truncate">{w.name}</span>
                   <RolePill role={w.role} />
                   {current?.id === w.id && <Check size={14} strokeWidth={1.5} className="shrink-0" />}
+                </MenuItem>
+              ))}
+              {/* Opening one takes two-factor authentication, so the row leads
+                  there rather than selecting a workspace that would show nothing. */}
+              {locked.map((w) => (
+                <MenuItem
+                  key={w.id}
+                  className="px-2"
+                  onSelect={() => navigate("/settings?tab=account")}
+                >
+                  <Lock size={14} strokeWidth={1.5} className="shrink-0 text-[var(--color-text-muted)]" />
+                  <span className="flex-1 min-w-0">
+                    <span className="block truncate">{w.name}</span>
+                    <span className="block truncate text-xs text-[var(--color-text-muted)]">
+                      Set up two-factor authentication
+                    </span>
+                  </span>
+                  {lockedCurrent?.id === w.id && <Check size={14} strokeWidth={1.5} className="shrink-0" />}
                 </MenuItem>
               ))}
             </>

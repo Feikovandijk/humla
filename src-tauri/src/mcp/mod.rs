@@ -152,7 +152,7 @@ pub fn active_workspace(conn: &Connection) -> String {
 /// var that repoints a shipped binary at an arbitrary SQLite file is a way around
 /// that — anything able to set the environment of the process a client spawns could
 /// serve a library the user never consented to, under Humla's name. Same shape and
-/// same reasoning as `commands::cloud::read_creds`, whose `HUMLA_DEV_SYNC_EMAIL` /
+/// same reasoning as `commands::cloud_auth::dev_account`, whose `HUMLA_DEV_SYNC_EMAIL` /
 /// `HUMLA_DEV_SYNC_PASSWORD` are debug-only for the equivalent reason.
 pub fn db_path() -> Option<PathBuf> {
     #[cfg(debug_assertions)]

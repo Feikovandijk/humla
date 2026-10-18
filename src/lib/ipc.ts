@@ -1055,7 +1055,10 @@ export function onToggleRecord(cb: () => void): Promise<UnlistenFn> {
 }
 
 // Coarse sync state from the cloud worker, for the sidebar indicator.
-export type SyncStatus = "syncing" | "idle" | "error";
+// `signed_out`: the session ended and only signing in again restarts sync.
+// `two_factor_required`: the workspace requires two-factor authentication the
+// user hasn't set up, so the server refuses everything in it.
+export type SyncStatus = "syncing" | "idle" | "error" | "signed_out" | "two_factor_required";
 export function onSyncStatus(cb: (s: SyncStatus) => void): Promise<UnlistenFn> {
   return listen<SyncStatus>("sync_status", (e) => cb(e.payload));
 }
