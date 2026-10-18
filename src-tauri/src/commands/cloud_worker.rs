@@ -45,6 +45,7 @@ pub struct CloudObserver {
 struct Manager {
     db: cloud_sync::Db,
     app: AppHandle,
+    keychain_cache: crate::keychain::Cache,
     running: Mutex<Running>,
 }
 
@@ -63,6 +64,7 @@ pub fn install(ctx: SyncContext) -> Arc<dyn SyncObserver> {
     let mgr = Arc::new(Manager {
         db: ctx.db,
         app: ctx.app,
+        keychain_cache: ctx.keychain_cache,
         running: Mutex::new(Running::default()),
     });
     mgr.restart();
@@ -165,7 +167,7 @@ impl Manager {
         if base_url.is_empty() || workspace_id.is_empty() {
             return None;
         }
-        if !super::cloud_auth::has_credentials(&self.app.state::<crate::AppState>().keychain_cache) {
+        if !super::cloud_auth::has_credentials(&self.keychain_cache) {
             return None;
         }
         // Where session-metadata pushes read each note's sessions.json manifest.
@@ -179,7 +181,10 @@ impl Manager {
             .unwrap_or_default();
         Some(cloud_sync::Config {
             base_url,
-            session: Arc::new(AppSession { app: self.app.clone() }),
+            session: Arc::new(AppSession {
+                db: self.db.clone(),
+                keychain_cache: self.keychain_cache.clone(),
+            }),
             workspace_id,
             poll_interval: POLL_INTERVAL,
             recordings_dir,
@@ -189,14 +194,14 @@ impl Manager {
 
 /// The app's one session (`super::cloud_auth`), lent to the worker.
 struct AppSession {
-    app: AppHandle,
+    db: cloud_sync::Db,
+    keychain_cache: crate::keychain::Cache,
 }
 
 impl cloud_sync::Session for AppSession {
     fn token(&self) -> cloud_sync::TokenFuture<'_> {
         Box::pin(async move {
-            let state = self.app.state::<crate::AppState>();
-            match super::cloud_auth::ensure_session(&state).await {
+            match super::cloud_auth::ensure_session_from(&self.db, &self.keychain_cache).await {
                 Ok((_, s)) => Ok(cloud_sync::Auth { token: s.token, user_id: s.user_id }),
                 Err(super::cloud_auth::SessionError::SignedOut(_)) => {
                     Err(anyhow::Error::new(cloud_sync::SignedOut))

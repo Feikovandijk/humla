@@ -12,7 +12,7 @@ use super::cloud::CloudStatus;
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use parking_lot::Mutex;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use tauri::State;
 
 /// The signed-in user, as the server last described them.
@@ -483,7 +483,23 @@ pub(crate) async fn ensure_session(
 async fn obtain_session(
     state: &State<'_, AppState>,
 ) -> Result<(String, Session, bool), SessionError> {
-    let base = super::cloud::read_base_url(state)
+    obtain_session_from(&state.db, &state.keychain_cache).await
+}
+
+/// [`ensure_session`] for the sync worker, which has the database and the
+/// Keychain cache but can't rely on `AppState`: it is built before `AppState` is.
+pub(crate) async fn ensure_session_from(
+    db: &Arc<parking_lot::Mutex<rusqlite::Connection>>,
+    cache: &crate::keychain::Cache,
+) -> Result<(String, Session), SessionError> {
+    obtain_session_from(db, cache).await.map(|(base, session, _)| (base, session))
+}
+
+async fn obtain_session_from(
+    db: &Arc<parking_lot::Mutex<rusqlite::Connection>>,
+    cache: &crate::keychain::Cache,
+) -> Result<(String, Session, bool), SessionError> {
+    let base = super::cloud::base_url(&db.lock())
         .ok_or_else(|| SessionError::SignedOut(NOT_CONFIGURED.into()))?;
     if let Some(session) = cached_session() {
         return Ok((base, session, false));
@@ -492,13 +508,13 @@ async fn obtain_session(
     if let Some(session) = cached_session() {
         return Ok((base, session, false));
     }
-    let Some(mut account) = read_account(&state.keychain_cache) else {
+    let Some(mut account) = read_account(cache) else {
         return Err(SessionError::SignedOut("Not signed in.".into()));
     };
     let before = account.clone();
     let renewed = renew(&PocketBase { base: &base }, &mut account).await;
     if account != before {
-        if let Err(e) = store_account(&state.keychain_cache, Some(&account)) {
+        if let Err(e) = store_account(cache, Some(&account)) {
             eprintln!("cloud: couldn't store the renewed session: {e}");
         }
     }

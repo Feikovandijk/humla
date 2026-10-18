@@ -193,16 +193,18 @@ where
             // Build the sync observer now that the db handle and AppHandle
             // exist. In the open-source build this is `NoopSync` and the
             // factory ignores the context.
+            let keychain_cache = keychain::new_cache();
             let sync = make_sync(sync::SyncContext {
                 db: db.clone(),
                 app: app.handle().clone(),
+                keychain_cache: keychain_cache.clone(),
             });
             app.manage(AppState {
                 db,
                 recording: Arc::new(Mutex::new(recording::LiveCapture::default())),
                 whisper: local_whisper::new_shared(),
                 transcribe_gate: Arc::new(tokio::sync::Mutex::new(())),
-                keychain_cache: keychain::new_cache(),
+                keychain_cache,
                 sync,
                 manifest_lock: Arc::new(tokio::sync::Mutex::new(())),
                 unify_locks: Arc::new(Mutex::new(std::collections::HashMap::new())),
