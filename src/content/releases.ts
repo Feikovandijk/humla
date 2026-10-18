@@ -3,13 +3,35 @@ export type Release = {
   date: string;
   title: string;
   summary: string;
-  visual?: "filters" | "privacy" | "activity" | "updates" | "speakers" | "webhook" | "export";
+  visual?: "filters" | "privacy" | "activity" | "updates" | "speakers" | "webhook" | "export" | "two-factor";
   paragraphs: string[];
   highlights: string[];
   issues: { title: string; reference: string; status: "Open" | "Closed"; url: string }[];
 };
 
 export const releases: Release[] = [
+  {
+    version: "0.69.0",
+    date: "2026-10-18",
+    title: "Two-factor authentication",
+    summary: "Protect your Humla Cloud account with a code from your phone, and require it for a whole team.",
+    visual: "two-factor",
+    paragraphs: [
+      "You can now turn on two-factor authentication for your Humla Cloud account. Signing in then asks for a 6-digit code from an authenticator app, like 1Password, Google Authenticator, Apple Passwords or Authy, as well as your password. Turn it on under Settings → Account. You get ten recovery codes when you do. Keep them somewhere safe: each one gets you in once if you lose your phone.",
+      "Workspace owners and admins can require it of everyone in the workspace, from the workspace settings under Settings → Account, and see who already has it before they switch it on. Until a member sets it up, the workspace shows as locked in their switcher and nothing in it syncs to their Mac. Changes they made keep waiting, and sync once they have it.",
+      "Humla also stays signed in now. It used to sign in again with your password every time it started. Now it keeps your session in your Mac’s Keychain and renews it, so a restart doesn’t ask for a code. If a session does end, Humla asks you to sign in again.",
+    ],
+    highlights: [
+      "Turn on two-factor authentication under Settings → Account.",
+      "Sign in with a code from your authenticator app, or a recovery code.",
+      "Require two-factor authentication for a whole workspace.",
+      "See which members have it before you require it.",
+      "Humla stays signed in between restarts.",
+    ],
+    issues: [
+      { title: "Two-factor authentication in the app: sign-in code, setup, workspace requirement", reference: "#221", status: "Closed", url: "https://github.com/michaelwilhelmsen/humla/issues/221" },
+    ],
+  },
   {
     version: "0.68.1",
     date: "2026-10-16",
