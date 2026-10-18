@@ -94,6 +94,26 @@ describe("the create-workspace sheet", () => {
     expect(screen.getByRole("heading", { name: /^sign in$/i })).toBeInTheDocument();
   });
 
+  it("takes the authenticator code when the account has two-factor authentication", async () => {
+    const verified: unknown[] = [];
+    const { setServer } = open(status({ logged_in: false, user: null }), {
+      cloud_login: () => ({ step: "two_factor" }),
+      cloud_verify_two_factor: (args) => {
+        verified.push(args);
+        setServer(status());
+        return status();
+      },
+    });
+    await userEvent.click(await screen.findByRole("button", { name: /already have an account/i }));
+    await userEvent.type(screen.getByLabelText(/email/i), "m@example.no");
+    await userEvent.type(screen.getByLabelText(/password/i), "hunter22{Enter}");
+
+    await userEvent.type(await screen.findByLabelText(/authentication code/i), "123456{Enter}");
+
+    expect(verified).toEqual([{ code: "123456", recoveryCode: null }]);
+    expect(await screen.findByRole("heading", { name: /name your workspace/i })).toBeInTheDocument();
+  });
+
   it("prices the workspace on the naming step, using the server's own seat price", async () => {
     open(status({ seat_price_cents: 700, seat_currency: "usd" }));
     expect(await screen.findByRole("heading", { name: /name your workspace/i })).toBeInTheDocument();

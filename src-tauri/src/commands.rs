@@ -26,6 +26,7 @@ mod clients;
 // `pub(crate)` so `crate::menubar` can resolve the active workspace when it
 // creates a note for a headless recording.
 pub(crate) mod cloud;
+pub(crate) mod cloud_auth;
 mod export;
 // Live cloud-sync worker glue. Behind the `cloud` feature; `pub` so `run()` can
 // reach `cloud_worker::install`. Not a #[tauri::command] group, so no glob
@@ -51,6 +52,7 @@ pub use assets::*;
 pub use chat::*;
 pub use clients::*;
 pub use cloud::*;
+pub use cloud_auth::*;
 pub use export::*;
 pub use folders::*;
 pub use local_llm::*;

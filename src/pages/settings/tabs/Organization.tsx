@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { LogOut, Trash2, UserPlus } from "lucide-react";
+import { LogOut, ShieldCheck, Trash2, UserPlus } from "lucide-react";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import {
   cloudApi,
+  cloudError,
   formatSeatPrice,
   roleColorVar,
   roleLabel,
@@ -16,6 +17,7 @@ import { Row, Section } from "../components/Section";
 import { Btn } from "../components/Btn";
 import { Select } from "../../../components/ui/Select";
 import { ValuePill } from "../components/ValuePill";
+import { Toggle } from "../components/Toggle";
 import { ChatKeyPanel } from "./ChatKeyPanel";
 import { NewWorkspaceModal } from "../../../components/NewWorkspaceModal";
 
@@ -31,6 +33,49 @@ function RolePill({ role }: { role: CloudRole }) {
       {roleLabel(role)}
     </span>
   );
+}
+
+/** Who has two-factor authentication, by member id; null while loading. */
+type TwoFactorRoster = Record<string, boolean> | "failed" | null;
+
+function TwoFactorBadge({ on }: { on: boolean }) {
+  return on ? (
+    <span
+      className="shrink-0 inline-flex items-center gap-1 text-xs"
+      style={{ color: "var(--color-success)" }}
+      title="Signs in with two-factor authentication"
+    >
+      <ShieldCheck size={12} strokeWidth={1.8} />
+      2FA
+    </span>
+  ) : (
+    <span
+      className="shrink-0 text-xs text-[var(--color-text-muted)]"
+      title="Hasn't set up two-factor authentication"
+    >
+      No 2FA
+    </span>
+  );
+}
+
+/** What requiring two-factor authentication would do, or does. */
+function requireDescription(
+  required: boolean,
+  youHaveIt: boolean,
+  members: CloudMember[],
+  hasTwoFactor: TwoFactorRoster,
+): string {
+  if (required) {
+    return "Members sign in with an authenticator code to open this workspace. Anyone without it can't until they set it up.";
+  }
+  if (!youHaveIt) {
+    return "Turn on two-factor authentication for your own account first, under Two-factor authentication above.";
+  }
+  const base = "Only members with two-factor authentication can open this workspace.";
+  if (hasTwoFactor === "failed") return `${base} Couldn't check which members have it.`;
+  const without = hasTwoFactor ? members.filter((m) => hasTwoFactor[m.id] === false).length : 0;
+  if (without === 0) return base;
+  return `${base} ${without} ${without === 1 ? "member doesn't" : "members don't"} have it yet and would lose access until they set it up.`;
 }
 
 function planMeta(status: CloudWorkspace["plan_status"]): { label: string; color: string } {
@@ -183,6 +228,8 @@ export function OrganizationTab() {
 
   const ws = status.current_workspace;
   const canManage = ws?.role === "owner" || ws?.role === "admin";
+  const twoFactor = status.two_factor;
+  const manageTwoFactor = canManage && !!twoFactor?.available;
 
   const [members, setMembers] = useState<CloudMember[]>([]);
   const [loading, setLoading] = useState(false);
@@ -196,6 +243,9 @@ export function OrganizationTab() {
   const [confirmLeave, setConfirmLeave] = useState(false);
   const [transferTo, setTransferTo] = useState("");
   const [confirmTransfer, setConfirmTransfer] = useState(false);
+  // Who has two-factor authentication, by member id: what an owner or admin
+  // needs to see before requiring it.
+  const [hasTwoFactor, setHasTwoFactor] = useState<TwoFactorRoster>(null);
 
   // Reseed the rename field and reset the danger confirms whenever the active
   // workspace (or its name, after a rename) changes.
@@ -224,6 +274,19 @@ export function OrganizationTab() {
     else setMembers([]);
   }, [ws?.id, loadMembers]);
 
+  useEffect(() => {
+    setHasTwoFactor(null);
+    if (!ws?.id || !manageTwoFactor) return;
+    let cancelled = false;
+    cloudApi
+      .twoFactorMembers(ws.id)
+      .then((map) => !cancelled && setHasTwoFactor(map))
+      .catch(() => !cancelled && setHasTwoFactor("failed"));
+    return () => {
+      cancelled = true;
+    };
+  }, [ws?.id, manageTwoFactor]);
+
   // Signed out: nothing to manage. The sign-in UI renders directly above in
   // the same Account section (post-merge), so no pointer stub is needed.
   if (!status.logged_in) {
@@ -232,11 +295,13 @@ export function OrganizationTab() {
 
   // No active workspace -----------------------------------------------------
   if (!ws) {
+    const locked = status.locked_current_workspace;
     return (
       <Section title="Workspace">
         <p className="text-sm text-[var(--color-text-muted)] py-3.5">
-          You're in Personal (local-only) mode. Create a workspace to start collaborating, or pick
-          one from the switcher at the top of the sidebar.
+          {locked
+            ? `${locked.name} requires two-factor authentication before you can open it. Turn it on under Two-factor authentication, above.`
+            : "You're in Personal (local-only) mode. Create a workspace to start collaborating, or pick one from the switcher at the top of the sidebar."}
         </p>
         {status.workspaces.length > 0 && (
           <Row label="Your workspaces">
@@ -309,6 +374,20 @@ export function OrganizationTab() {
     try {
       await cloudApi.removeMember(ws.id, userId);
       await loadMembers(ws.id);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setRequireTwoFactor(require: boolean) {
+    if (!ws) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await cloudApi.setWorkspaceRequire2fa(ws.id, require);
+      await refreshCloud();
+    } catch (e) {
+      setError(cloudError(e).message);
     } finally {
       setBusy(false);
     }
@@ -415,6 +494,20 @@ export function OrganizationTab() {
           }
           control={<RolePill role={ws.role} />}
         />
+        {manageTwoFactor && (
+          <Row
+            label="Require two-factor authentication"
+            description={requireDescription(ws.require_2fa ?? false, twoFactor.enabled, members, hasTwoFactor)}
+            control={
+              <Toggle
+                label="Require two-factor authentication"
+                checked={ws.require_2fa ?? false}
+                disabled={busy || (!twoFactor.enabled && !ws.require_2fa)}
+                onChange={setRequireTwoFactor}
+              />
+            }
+          />
+        )}
       </Section>
 
       {status.billing_enabled && ws && (
@@ -449,6 +542,9 @@ export function OrganizationTab() {
                 <div className="text-sm truncate">{m.name || m.email}</div>
                 {m.name && <div className="text-xs text-[var(--color-text-muted)] truncate">{m.email}</div>}
               </div>
+              {hasTwoFactor && hasTwoFactor !== "failed" && m.id in hasTwoFactor && (
+                <TwoFactorBadge on={hasTwoFactor[m.id]} />
+              )}
               {canManage && m.role !== "owner" ? (
                 // Non-growing slot so the name/email block (flex-1 min-w-0)
                 // keeps its space; the popover Select trigger sizes to content.

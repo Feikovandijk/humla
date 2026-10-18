@@ -8,13 +8,20 @@ import {
   type CloudStatus,
   type CloudWorkspace,
 } from "../lib/cloud";
+import { MemoryRouter } from "react-router-dom";
 import { mockTauri } from "../test/tauri";
+import { LocationProbe } from "../test/app";
 
-function seed(over: Partial<CloudStatus> = {}) {
+function seed(over: Partial<CloudStatus> = {}, handlers: Parameters<typeof mockTauri>[0] = {}) {
   const status = { ...DISCONNECTED, ...over };
-  mockTauri({ cloud_status: () => status });
+  mockTauri({ cloud_status: () => status, ...handlers });
   useCloudStore.setState({ status, ready: true });
-  return render(<WorkspaceSwitcher />);
+  return render(
+    <MemoryRouter>
+      <WorkspaceSwitcher />
+      <LocationProbe />
+    </MemoryRouter>,
+  );
 }
 
 beforeEach(() => {
@@ -105,7 +112,11 @@ describe("the ambient team hint", () => {
       },
     });
     useCloudStore.setState({ status: live, ready: true });
-    render(<WorkspaceSwitcher />);
+    render(
+      <MemoryRouter>
+        <WorkspaceSwitcher />
+      </MemoryRouter>,
+    );
 
     await userEvent.click(screen.getByText("Add team"));
     await userEvent.type(await screen.findByLabelText(/workspace name/i), "Acme{Enter}");
@@ -113,5 +124,41 @@ describe("the ambient team hint", () => {
 
     await waitFor(() => expect(checkouts).toHaveLength(1));
     expect(checkouts[0]).toMatchObject({ workspaceId: "w9", source: "team_hint_switcher" });
+  });
+});
+
+describe("a workspace that requires two-factor authentication", () => {
+  const LOCKED = { id: "w9", name: "Secure Co" };
+
+  it("shows locked, and leads to setting it up instead of opening", async () => {
+    const selected: unknown[] = [];
+    seed(
+      { logged_in: true, workspaces: [], locked_workspaces: [LOCKED] },
+      { cloud_select_workspace: (args) => selected.push(args) },
+    );
+    await userEvent.click(screen.getByRole("button", { name: /personal/i }));
+
+    const item = await screen.findByRole("menuitem", { name: /secure co/i });
+    expect(item).toHaveTextContent(/set up two-factor authentication/i);
+    await userEvent.click(item);
+
+    expect(screen.getByTestId("location")).toHaveTextContent("/settings?tab=account");
+    expect(selected).toEqual([]);
+  });
+
+  it("is named on the trigger when it is the selected workspace", () => {
+    seed({ logged_in: true, locked_workspaces: [LOCKED], locked_current_workspace: LOCKED });
+    expect(screen.getByRole("button", { name: /secure co/i })).toBeInTheDocument();
+  });
+});
+
+describe("a session that ended by itself", () => {
+  it("asks you to sign in again, where the add-team hint would be", async () => {
+    seed({ configured: true, logged_in: false, signed_out_email: "m@example.no" });
+
+    expect(screen.queryByText("Add team")).toBeNull();
+    await userEvent.click(screen.getByText("Sign in"));
+
+    expect(screen.getByTestId("location")).toHaveTextContent("/settings?tab=account");
   });
 });

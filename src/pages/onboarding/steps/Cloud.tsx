@@ -71,6 +71,8 @@ import {
 } from "../../../lib/cloud";
 import { checkoutKind, offersTrial, planIsLive, useCheckout } from "../../../lib/billing";
 import type { StepContext } from "../types";
+import { useCloudSignIn } from "../../../lib/useCloudSignIn";
+import { TwoFactorCodeForm } from "../../../components/TwoFactorCodeForm";
 import { StepShell } from "../StepShell";
 
 type Option = "solo" | "team" | "existing";
@@ -358,41 +360,41 @@ function ConnectStage() {
 
 function AuthStage({ mode: initialMode }: { mode: "signup" | "signin" }) {
   const status = useCloudStore((s) => s.status);
-  const refresh = useCloudStore((s) => s.refresh);
+  const auth = useCloudSignIn();
 
   const [mode, setMode] = useState(initialMode);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error } = auth;
 
   const isSignup = mode === "signup";
 
   function toggleMode() {
     setMode(isSignup ? "signin" : "signup");
-    setError(null);
+    auth.setError(null);
   }
   const canSubmit =
     !!email.trim() && !!password && (!isSignup || !!name.trim());
 
   async function submit() {
     if (!canSubmit) return;
-    setBusy(true);
-    setError(null);
-    try {
-      if (isSignup) {
-        await cloudApi.signup(email.trim(), password, name.trim());
-      } else {
-        await cloudApi.login(email.trim(), password);
-      }
-      setPassword("");
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
+    const signedIn = isSignup
+      ? await auth.signUp(email.trim(), password, name.trim())
+      : await auth.signIn(email.trim(), password);
+    if (signedIn) setPassword("");
+  }
+
+  if (auth.step === "code") {
+    return (
+      <TwoFactorCodeForm
+        busy={busy}
+        error={error}
+        inputClassName={inputCls}
+        onSubmit={(factor) => void auth.verify(factor).then((ok) => ok && setPassword(""))}
+        onBack={auth.back}
+      />
+    );
   }
 
   return (

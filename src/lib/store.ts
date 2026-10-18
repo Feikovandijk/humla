@@ -459,6 +459,8 @@ export function bindBackendListeners() {
   onSyncStatus((s) => {
     useCloudStore.getState().setSyncStatus(s);
     void useCloudStore.getState().refreshPending();
+    // Both are the account's state changing under the UI: the status says how.
+    if (s === "signed_out" || s === "two_factor_required") void useCloudStore.getState().refresh();
   });
   // A sync conflict preserved local edits as a copy → tell the user where it went.
   onSyncConflict((title) =>

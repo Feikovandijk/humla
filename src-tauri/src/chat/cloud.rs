@@ -290,6 +290,7 @@ pub fn cloud_chat_error_message(reason: &str, server_message: &str) -> String {
         "chat_disabled" | "chat_unavailable" | "index_unavailable" => {
             "Team chat isn't available on this server.".to_string()
         }
+        "two_factor_required" => crate::commands::cloud_auth::TWO_FACTOR_REQUIRED.to_string(),
         _ => {
             let m = server_message.trim();
             if m.is_empty() {
@@ -427,6 +428,7 @@ pub fn chat_key_error_message(reason: &str, server_message: &str) -> String {
         "not_a_member" => "You're not a member of this workspace.".to_string(),
         "unauthorized" => "Please sign in again.".to_string(),
         "bad_request" => "That doesn't look like a valid key.".to_string(),
+        "two_factor_required" => crate::commands::cloud_auth::TWO_FACTOR_REQUIRED.to_string(),
         _ => {
             let m = server_message.trim();
             if m.is_empty() {
@@ -869,6 +871,15 @@ mod tests {
         assert!(q.contains("add-on"), "quota block names the chat add-on: {q}");
         assert_eq!(cloud_chat_error_message("weird_reason", "raw server text"), "raw server text");
         assert!(!cloud_chat_error_message("weird_reason", "  ").is_empty());
+    }
+
+    /// A workspace that requires two-factor authentication answers its chat and
+    /// key routes with 403 `two_factor_required`; both say where to fix it.
+    #[test]
+    fn a_two_factor_requirement_says_where_to_set_it_up() {
+        let expected = crate::commands::cloud_auth::TWO_FACTOR_REQUIRED;
+        assert_eq!(cloud_chat_error_message("two_factor_required", "x"), expected);
+        assert_eq!(chat_key_error_message("two_factor_required", "x"), expected);
     }
 
     #[test]

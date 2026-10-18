@@ -27,7 +27,74 @@ export type CloudWorkspace = {
   plan_status: PlanStatus;
   /** Billed seats (= workspace members). Absent on servers predating per-seat billing. */
   seats?: number | null;
+  /** Every member must have two-factor authentication to open it. */
+  require_2fa?: boolean;
 };
+
+/** A workspace named and nothing more: all a member is told about one that
+ *  requires two-factor authentication they don't have yet. */
+export type WorkspaceRef = { id: string; name: string };
+
+/** The signed-in user's two-factor authentication. `available` is false
+ *  on a server without it, and the app then shows none of it. */
+export type TwoFactorStatus = {
+  available: boolean;
+  enabled: boolean;
+  recovery_codes_left: number;
+  /** Every workspace the user is in that requires it. */
+  required_by: WorkspaceRef[];
+};
+
+export const TWO_FACTOR_UNAVAILABLE: TwoFactorStatus = {
+  available: false,
+  enabled: false,
+  recovery_codes_left: 0,
+  required_by: [],
+};
+
+/** Where a password sign-in landed: signed in, or waiting for the code from
+ *  the user's authenticator app (`cloudApi.verifyTwoFactor`). */
+export type SignInStep =
+  | { step: "signed_in"; status: CloudStatus }
+  | { step: "two_factor" };
+
+/** The second factor a two-factor route takes. */
+export type SecondFactor = { code: string } | { recoveryCode: string };
+
+/** What an authenticator app is set up with. `qr.path` draws its dark modules
+ *  one unit apart; the quiet zone is the page's to add. */
+export type TwoFactorSetup = {
+  secret: string;
+  otpauth_uri: string;
+  qr: { size: number; path: string } | null;
+};
+
+/** How the two-factor commands fail: `reason` is the server's code to branch
+ *  on (empty when there is none), `message` what the user reads. */
+export type CloudError = { reason: string; message: string };
+
+/** Read any command's rejection as a CloudError. Most commands reject with a
+ *  plain string; the two-factor ones with `{ reason, message }`. */
+export function cloudError(e: unknown): CloudError {
+  if (e && typeof e === "object" && "message" in e) {
+    const { reason, message } = e as { reason?: unknown; message?: unknown };
+    return { reason: typeof reason === "string" ? reason : "", message: String(message) };
+  }
+  return { reason: "", message: String(e) };
+}
+
+/** "Acme", "Acme and Beta", "Acme, Beta and Gamma". */
+export function joinNames(names: string[]): string {
+  if (names.length < 2) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+function factorArgs(factor: SecondFactor | null) {
+  return {
+    code: factor && "code" in factor ? factor.code : null,
+    recoveryCode: factor && "recoveryCode" in factor ? factor.recoveryCode : null,
+  };
+}
 export type CloudMember = { id: string; email: string; name: string; role: CloudRole };
 
 /**
@@ -61,6 +128,17 @@ export type CloudStatus = {
   /** Managed chat add-on config, when the server advertises it (issue #75).
    *  null/absent → self-host or not configured; the add-on pitch is dropped. */
   chat_addon?: ChatAddon | null;
+  /** The signed-in user's two-factor authentication; unavailable when signed out. */
+  two_factor?: TwoFactorStatus;
+  /** Workspaces the user is in but can't open until they set up two-factor
+   *  authentication: the server leaves them out of `workspaces`. */
+  locked_workspaces?: WorkspaceRef[];
+  /** The selected workspace when it is one of `locked_workspaces` — then
+   *  `current_workspace` is null although a workspace is selected. */
+  locked_current_workspace?: WorkspaceRef | null;
+  /** Signed out without signing out: the email of the account whose session
+   *  ended, for the sign-in form to ask them back. */
+  signed_out_email?: string | null;
 };
 
 /** Managed chat add-on advertised in the server's billing config (issue #75). */
@@ -97,7 +175,29 @@ export const cloudApi = {
   status: () => invoke<CloudStatus>("cloud_status"),
   configure: (baseUrl: string) => invoke<void>("cloud_configure", { baseUrl }),
   login: (email: string, password: string) =>
-    invoke<CloudStatus>("cloud_login", { email, password }),
+    invoke<SignInStep>("cloud_login", { email, password }),
+  /** Finish a sign-in that answered with `two_factor`. */
+  verifyTwoFactor: (factor: SecondFactor) =>
+    invoke<CloudStatus>("cloud_verify_two_factor", factorArgs(factor)),
+  /** Start linking an authenticator app. With two-factor authentication on
+   *  already this replaces the app, and takes its code or a recovery code. */
+  twoFactorSetup: (password: string, factor: SecondFactor | null = null) =>
+    invoke<TwoFactorSetup>("cloud_two_factor_setup", { password, ...factorArgs(factor) }),
+  /** Confirm the app with its first code. Returns the ten recovery codes, shown once. */
+  twoFactorEnable: (code: string) => invoke<string[]>("cloud_two_factor_enable", { code }),
+  /** Replace the recovery codes; the old ones stop working. */
+  twoFactorRecoveryCodes: (password: string, factor: SecondFactor) =>
+    invoke<string[]>("cloud_two_factor_recovery_codes", { password, ...factorArgs(factor) }),
+  twoFactorDisable: (password: string, factor: SecondFactor) =>
+    invoke<void>("cloud_two_factor_disable", { password, ...factorArgs(factor) }),
+  /** Which members have two-factor authentication, by user id. Owner and admins only. */
+  twoFactorMembers: (workspaceId: string) =>
+    invoke<Record<string, boolean>>("cloud_two_factor_members", { workspaceId }),
+  setWorkspaceRequire2fa: (workspaceId: string, require: boolean) =>
+    invoke<void>("cloud_set_workspace_require_2fa", { workspaceId, require }),
+  /** Write the recovery codes to a .txt file the user picked. */
+  saveRecoveryCodes: (path: string, codes: string[]) =>
+    invoke<void>("cloud_save_recovery_codes", { path, codes }),
   signup: (email: string, password: string, name: string) =>
     invoke<CloudStatus>("cloud_signup", { email, password, name }),
   /** Resend the email-verification message to the signed-in user. */
@@ -161,6 +261,10 @@ export const DISCONNECTED: CloudStatus = {
   seat_price_cents: null,
   seat_currency: null,
   chat_addon: null,
+  two_factor: TWO_FACTOR_UNAVAILABLE,
+  locked_workspaces: [],
+  locked_current_workspace: null,
+  signed_out_email: null,
 };
 
 type CloudState = {
