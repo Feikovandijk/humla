@@ -319,6 +319,7 @@ where
                 }
             };
             menubar::present_at_launch(app.handle(), tray_installed);
+            menubar::associate_login_item(app.handle());
 
             Ok(())
         })
