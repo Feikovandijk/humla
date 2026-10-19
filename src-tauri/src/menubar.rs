@@ -553,6 +553,36 @@ pub fn login_item_path_problem(exe: &std::path::Path) -> Option<&'static str> {
     }
 }
 
+/// Tie the login item's LaunchAgent to the app bundle. The autostart plugin
+/// writes a plist naming no app, and macOS then lists it in Login Items under
+/// the code signer's name instead of "Humla". Runs after every enable and at
+/// launch, so an agent written by an older build is fixed too.
+pub fn associate_login_item(app: &AppHandle) {
+    let id = &app.config().identifier;
+    let Some(home) = std::env::var_os("HOME") else { return };
+    let path = std::path::Path::new(&home)
+        .join("Library/LaunchAgents")
+        .join(format!("{id}.plist"));
+    let Ok(plist) = std::fs::read_to_string(&path) else { return };
+    if let Some(patched) = with_associated_bundle(&plist, id) {
+        if let Err(e) = std::fs::write(&path, patched) {
+            eprintln!("[menubar] login item: {e}");
+        }
+    }
+}
+
+fn with_associated_bundle(plist: &str, id: &str) -> Option<String> {
+    if plist.contains("AssociatedBundleIdentifiers") {
+        return None;
+    }
+    let at = plist.rfind("</dict>")?;
+    Some(format!(
+        "{}<key>AssociatedBundleIdentifiers</key><array><string>{id}</string></array>{}",
+        &plist[..at],
+        &plist[at..]
+    ))
+}
+
 /// Present the window at launch, or leave Humla in the menu bar after a login
 /// launch. The window is declared invisible in `tauri.conf.json`, so a hidden
 /// launch never flashes it. Without a tray there would be nothing on screen to
@@ -1052,6 +1082,17 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn login_item_names_its_app_once() {
+        let plist = "<plist><dict><key>Label</key><string>no.humla.app</string></dict></plist>";
+        let patched = with_associated_bundle(plist, "no.humla.app").unwrap();
+        assert!(patched.ends_with(
+            "<key>AssociatedBundleIdentifiers</key><array><string>no.humla.app</string></array></dict></plist>"
+        ));
+        assert_eq!(with_associated_bundle(&patched, "no.humla.app"), None);
+        assert_eq!(with_associated_bundle("garbage", "no.humla.app"), None);
     }
 
     #[test]

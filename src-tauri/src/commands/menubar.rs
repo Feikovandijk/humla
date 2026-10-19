@@ -40,5 +40,9 @@ pub fn launch_at_login_set(app: AppHandle, on: bool) -> Result<(), String> {
         }
     }
     let manager = app.autolaunch();
-    if on { manager.enable() } else { manager.disable() }.map_err(|e| e.to_string())
+    if on { manager.enable() } else { manager.disable() }.map_err(|e| e.to_string())?;
+    if on {
+        menubar::associate_login_item(&app);
+    }
+    Ok(())
 }
