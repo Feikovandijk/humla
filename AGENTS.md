@@ -73,6 +73,11 @@ scripts/                  build-*.sh (sidecars, mcp, metallib, dmg), release.sh,
 
 On a fresh clone `src-tauri/binaries/` doesn't exist. `tauri-build` fails when an `externalBin` (`audio-capture`, `speaker-diarize`, `humla-mcp`) is missing, so run the build scripts before any cargo build. Building and signing need a Mac. Without a Developer ID identity the binaries still build, unsigned.
 
+## Git and pull requests
+
+- This checkout is the fork `Feikovandijk/humla` (`origin`). **Open every PR against the fork's `main`** (`gh pr create --repo Feikovandijk/humla --base main`). Never open one against the upstream `michaelwilhelmsen/humla`.
+- Branch off `main`; don't commit to it directly.
+
 ## Rules that are easy to break
 
 - **`keep_audio` is the single, absolute gate on audio.** When it is off, no WAV is written, uploaded or downloaded. Don't add exceptions. MCP and the webhook never return or reference audio.
