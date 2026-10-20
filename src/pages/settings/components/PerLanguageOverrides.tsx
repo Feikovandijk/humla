@@ -1,11 +1,9 @@
 import { useState } from "react";
 import { LANGUAGES, languageOptionLabel } from "../../../lib/languages";
 import type { ProviderConfig, TranscribeConfig } from "../../../lib/ipc";
-import { ProviderConfigForm, localModelsFor } from "./ProviderConfigForm";
+import { ProviderConfigForm, localModelsFor, type OnDeviceConfig } from "./ProviderConfigForm";
 import { Select } from "../../../components/ui/Select";
 import type { LocalState } from "../types";
-
-type LocalConfig = Extract<ProviderConfig, { provider: "local" }>;
 
 // Section that lists existing per-language overrides and offers a + Add
 // form to create new ones. Each entry is rendered as a card with a
@@ -17,11 +15,13 @@ export function PerLanguageOverrides({
   setLanguageOverride,
   removeLanguageOverride,
   local,
+  parakeetDownloaded = false,
 }: {
   config: TranscribeConfig;
   setLanguageOverride: (language: string, cfg: ProviderConfig) => Promise<void>;
   removeLanguageOverride: (language: string) => Promise<void>;
   local: LocalState;
+  parakeetDownloaded?: boolean;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const entries = Object.entries(config.per_language).sort(([a], [b]) =>
@@ -33,7 +33,7 @@ export function PerLanguageOverrides({
       <p className="text-xs text-[var(--color-text-muted)]">
         Override the default model for specific recording languages.
         Useful when one model is materially better for a given language —
-        e.g. NB Whisper for Norwegian.
+        e.g. Parakeet Ultra for English.
       </p>
 
       {entries.length > 0 ? (
@@ -66,6 +66,7 @@ export function PerLanguageOverrides({
         <AddOverrideForm
           existingLanguages={Object.keys(config.per_language)}
           local={local}
+          parakeetDownloaded={parakeetDownloaded}
           onCancel={() => setShowAddForm(false)}
           onAdd={async (language, cfg) => {
             await setLanguageOverride(language, cfg);
@@ -119,17 +120,21 @@ function summariseProvider(cfg: ProviderConfig): string {
       return `Groq · ${cfg.model}`;
     case "local":
       return `Local · ${cfg.model_id} · ${cfg.preset} preset · GPU ${cfg.use_gpu ? "on" : "off"}`;
+    case "parakeet":
+      return `Parakeet · ${cfg.model}`;
   }
 }
 
 function AddOverrideForm({
   existingLanguages,
   local,
+  parakeetDownloaded = false,
   onCancel,
   onAdd,
 }: {
   existingLanguages: string[];
   local: LocalState;
+  parakeetDownloaded?: boolean;
   onCancel: () => void;
   onAdd: (language: string, cfg: ProviderConfig) => Promise<void>;
 }) {
@@ -141,7 +146,7 @@ function AddOverrideForm({
   );
   const initialLanguage = available[0]?.value ?? "no";
   const [language, setLanguage] = useState(initialLanguage);
-  const [picked, setPicked] = useState<LocalConfig>({
+  const [picked, setPicked] = useState<OnDeviceConfig>({
     provider: "local",
     model_id: "",
     preset: "quality",
@@ -150,9 +155,13 @@ function AddOverrideForm({
   // A model picked for one language may not suit the next; fall back to the
   // first that does.
   const usable = localModelsFor(local.models, language);
-  const cfg = usable.some((m) => m.id === picked.model_id)
-    ? picked
-    : { ...picked, model_id: usable[0]?.id ?? "" };
+  const cfg: OnDeviceConfig =
+    (picked.provider === "parakeet" && parakeetDownloaded) ||
+    (picked.provider === "local" && usable.some((m) => m.id === picked.model_id))
+      ? picked
+      : usable.length === 0 && parakeetDownloaded
+        ? { provider: "parakeet", model: "ultra" }
+        : { provider: "local", model_id: usable[0]?.id ?? "", preset: "quality", use_gpu: true };
 
   return (
     <div className="flex flex-col gap-3 px-3 py-3 rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)]">
@@ -167,12 +176,13 @@ function AddOverrideForm({
           label: languageOptionLabel(l),
         }))}
       />
-      {usable.length > 0 ? (
+      {usable.length > 0 || parakeetDownloaded ? (
         <ProviderConfigForm
           value={cfg}
           onChange={setPicked}
           localModels={local.models}
           filterLocalToLanguage={language}
+          parakeetDownloaded={parakeetDownloaded}
         />
       ) : (
         <p className="text-xs text-[var(--color-text-muted)]">
@@ -190,7 +200,7 @@ function AddOverrideForm({
         <button
           type="button"
           onClick={() => onAdd(language, cfg)}
-          disabled={usable.length === 0}
+          disabled={usable.length === 0 && !parakeetDownloaded}
           className="text-sm px-3 py-1.5 rounded-md bg-[var(--color-text)] text-[var(--color-canvas)] disabled:opacity-40"
         >
           Add

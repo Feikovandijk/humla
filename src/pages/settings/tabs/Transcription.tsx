@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { DiarizeModelManager } from "../components/DiarizeModelManager";
 import { Disclosure } from "../components/Disclosure";
+import { ParakeetModelManager } from "../components/ParakeetModelManager";
 import { PerLanguageOverrides } from "../components/PerLanguageOverrides";
 import { LocalTuningRows } from "../components/ProviderConfigForm";
 import { TranscriptionModelPicker } from "../components/TranscriptionModelPicker";
@@ -99,6 +100,9 @@ export function TranscriptionTab({
   local,
   downloadModel,
   deleteModel,
+  parakeet,
+  downloadParakeet,
+  deleteParakeet,
   diarize,
   downloadDiarize,
   deleteDiarize,
@@ -113,6 +117,9 @@ export function TranscriptionTab({
   | "local"
   | "downloadModel"
   | "deleteModel"
+  | "parakeet"
+  | "downloadParakeet"
+  | "deleteParakeet"
   | "diarize"
   | "downloadDiarize"
   | "deleteDiarize"
@@ -130,6 +137,18 @@ export function TranscriptionTab({
           onDelete={deleteModel}
           setLanguageOverride={setLanguageOverride}
         />
+        <ParakeetModelManager
+          state={parakeet}
+          selected={def.provider === "parakeet"}
+          onSelect={() => setDefaultConfig({ provider: "parakeet", model: "ultra" })}
+          onDownload={downloadParakeet}
+          onDelete={deleteParakeet}
+        />
+        {def.provider === "parakeet" && !parakeet.status?.downloaded && (
+          <p className="text-xs text-[var(--color-danger)] py-3">
+            Parakeet Ultra isn't downloaded. Download it above before recording.
+          </p>
+        )}
         {def.provider === "local" && (
           <LocalTuningRows value={def} onChange={setDefaultConfig} />
         )}
@@ -152,13 +171,14 @@ export function TranscriptionTab({
             <div className="text-sm">Per-language overrides</div>
             <p className="text-xs text-[var(--color-text-muted)] mt-0.5 mb-3">
               Route specific recording languages to a different model than
-              the default above — e.g. NB Whisper for Norwegian.
+              the default above, such as Parakeet Ultra for English.
             </p>
             <PerLanguageOverrides
               config={transcribeConfig}
               setLanguageOverride={setLanguageOverride}
               removeLanguageOverride={removeLanguageOverride}
               local={local}
+              parakeetDownloaded={parakeet.status?.downloaded ?? false}
             />
           </div>
         </Disclosure>

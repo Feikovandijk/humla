@@ -4,6 +4,8 @@ import { Row } from "./Section";
 import { Select } from "../../../components/ui/Select";
 import { Toggle } from "./Toggle";
 
+export type OnDeviceConfig = Extract<ProviderConfig, { provider: "local" | "parakeet" }>;
+
 type LocalConfig = Extract<ProviderConfig, { provider: "local" }>;
 
 // The local models usable for a language: multilingual ones plus any trained
@@ -23,16 +25,20 @@ export function ProviderConfigForm({
   onChange,
   localModels,
   filterLocalToLanguage,
+  parakeetDownloaded = false,
 }: {
-  value: LocalConfig;
-  onChange: (next: LocalConfig) => void;
+  value: OnDeviceConfig;
+  onChange: (next: OnDeviceConfig) => void;
   localModels: LocalWhisperModelStatus[];
   filterLocalToLanguage?: string;
+  parakeetDownloaded?: boolean;
 }) {
   const options = localModelsFor(localModels, filterLocalToLanguage).map((m) => ({
     value: m.id,
     label: m.label,
   }));
+  if (parakeetDownloaded) options.push({ value: "parakeet-ultra", label: "Parakeet Ultra" });
+  const model = value.provider === "local" ? value.model_id : "parakeet-ultra";
   return (
     <>
       <Row
@@ -40,17 +46,21 @@ export function ProviderConfigForm({
         description="Only downloaded models are offered — download more in the list above."
         control={
           <Select
-            value={value.model_id}
-            onChange={(v) => onChange({ ...value, model_id: v })}
+            value={model}
+            onChange={(v) => onChange(v === "parakeet-ultra"
+              ? { provider: "parakeet", model: "ultra" }
+              : value.provider === "local"
+                ? { ...value, model_id: v }
+                : { provider: "local", model_id: v, preset: "quality", use_gpu: true })}
             options={
               options.length > 0
                 ? options
-                : [{ value: value.model_id, label: `${value.model_id} (not downloaded)` }]
+                : [{ value: model, label: `${model} (not downloaded)` }]
             }
           />
         }
       />
-      <LocalTuningRows value={value} onChange={onChange} />
+      {value.provider === "local" && <LocalTuningRows value={value} onChange={onChange} />}
     </>
   );
 }

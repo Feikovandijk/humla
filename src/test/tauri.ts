@@ -83,6 +83,8 @@ export function mockTauri(
         throw new Error("Couldn't reach http://localhost:11434/v1/embeddings");
       case "diarize_status":
         return { downloaded: false, needsWarmUp: false, warmUpError: null, sizeBytes: 0, path: "" };
+      case "parakeet_status":
+        return { downloaded: false, needsWarmUp: false, warmUpError: null, sizeBytes: null, path: null };
       case "app_data_dir":
         return "/tmp/humla-test";
       case "system_arch":

@@ -8,9 +8,13 @@ import { formatBytes } from "./format";
 // One-word character of each model, shown right-aligned on its row.
 const TAG: Record<string, string> = {
   "large-v3-turbo-q5": "Recommended",
-  "large-v3-q5": "Most accurate",
+  "large-v3": "Best quality",
+  "large-v3-q5": "Accurate",
   "large-v2-q5": "Accented speech",
-  "medium-q5": "Fastest",
+  "medium-q5": "Balanced",
+  "small-q5": "Compact",
+  "base-q5": "Light",
+  "tiny-q5": "Fastest",
 };
 
 function languageName(code: string | null) {
@@ -133,12 +137,12 @@ export function TranscriptionModelPicker({
           );
         })}
       </div>
-      {current === null ? (
+      {current === null && value.provider !== "parakeet" ? (
         <p className="text-xs text-[var(--color-warning-text)] mt-2">
           Pick a model above — recordings won’t transcribe on this Mac until one is chosen.
         </p>
       ) : (
-        !local.models.some((m) => m.id === current && m.downloaded) && (
+        value.provider === "local" && !local.models.some((m) => m.id === current && m.downloaded) && (
           <p className="text-xs text-[var(--color-warning-text)] mt-2">
             The selected model isn’t downloaded — recording won’t start until it is.
           </p>

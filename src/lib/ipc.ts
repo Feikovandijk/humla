@@ -189,14 +189,15 @@ export type SettingsKey =
 
 export type TranscribeProvider = Provider;
 
-// Mirror of the Rust `crate::stt::ProviderConfig` tagged union. The four
-// variants match the four supported STT providers; `local` carries the
-// extra preset + GPU fields it needs.
+// Mirror of the Rust `crate::stt::ProviderConfig` tagged union. The variants
+// match the supported STT providers; `local` carries the extra preset + GPU
+// fields Whisper needs, `parakeet` names its FluidAudio model.
 export type ProviderConfig =
   | { provider: "openai"; model: string; base_url?: string }
   | { provider: "local"; model_id: string; preset: string; use_gpu: boolean }
   | { provider: "deepgram"; model: string; base_url?: string }
-  | { provider: "groq"; model: string };
+  | { provider: "groq"; model: string }
+  | { provider: "parakeet"; model: string };
 
 // Mirror of the Rust `crate::stt::TranscribeConfig`. Wraps a default
 // ProviderConfig plus a map of per-language overrides keyed by ISO 639-1
@@ -242,6 +243,17 @@ export type LocalWhisperProgress = {
 };
 
 export type LocalWhisperDownloadError = {
+  modelId: string;
+  message: string;
+};
+
+export type ParakeetProgress = {
+  modelId: string;
+  fraction: number;
+  phase: string;
+};
+
+export type ParakeetDownloadError = {
   modelId: string;
   message: string;
 };
@@ -594,6 +606,10 @@ export const ipc = {
     invoke<void>("diarize_download", { engine }),
   diarizeDelete: (engine?: DiarizeEngine) =>
     invoke<void>("diarize_delete", { engine }),
+
+  parakeetStatus: () => invoke<DiarizeModelStatus>("parakeet_status"),
+  parakeetDownload: () => invoke<void>("parakeet_download"),
+  parakeetDelete: () => invoke<void>("parakeet_delete"),
 
   localLlmListModels: (baseUrl: string) =>
     invoke<string[]>("local_llm_list_models", { baseUrl }),
@@ -1049,6 +1065,14 @@ export function onLocalWhisperDownloadError(
 }
 export function onDiarizeDownloadProgress(cb: (e: DiarizeDownloadProgress) => void): Promise<UnlistenFn> {
   return listen<DiarizeDownloadProgress>("diarize_download_progress", (e) => cb(e.payload));
+}
+export function onParakeetProgress(cb: (e: ParakeetProgress) => void): Promise<UnlistenFn> {
+  return listen<ParakeetProgress>("parakeet_progress", (e) => cb(e.payload));
+}
+export function onParakeetDownloadError(
+  cb: (e: ParakeetDownloadError) => void,
+): Promise<UnlistenFn> {
+  return listen<ParakeetDownloadError>("parakeet_download_error", (e) => cb(e.payload));
 }
 // "The notes table changed underneath you — refetch." Two emitters: the cloud
 // sync worker, after it applies pulled remote changes (only when sync is active

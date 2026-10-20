@@ -72,6 +72,10 @@ export const LOCAL_PROVIDER = {
   value: "local",
   label: "Local (Whisper turbo, on-device)",
 };
+export const PARAKEET_PROVIDER = {
+  value: "parakeet",
+  label: "Parakeet Ultra (on-device)",
+};
 
 // How each capable provider is named in the two pickers. Which providers
 // appear is derived from the registry's capability flags; only the wording is
@@ -82,6 +86,7 @@ const PROVIDER_PICKER_LABEL: Record<Provider, string> = {
   local: "Local (any OpenAI-compatible server)",
   deepgram: "Deepgram",
   groq: "Groq",
+  parakeet: "Parakeet Ultra (on-device)",
 };
 
 export const SUMMARY_PROVIDERS = SUMMARY_CAPABLE.map((id) => ({
@@ -203,6 +208,22 @@ export const EMPTY_DIARIZE_STATE: DiarizeState = {
   phase: null,
   error: null,
   flash: null,
+};
+
+export type ParakeetState = {
+  status: DiarizeModelStatus | null;
+  downloading: boolean;
+  fraction: number;
+  phase: string | null;
+  error: string | null;
+};
+
+export const EMPTY_PARAKEET_STATE: ParakeetState = {
+  status: null,
+  downloading: false,
+  fraction: 0,
+  phase: null,
+  error: null,
 };
 
 

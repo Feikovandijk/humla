@@ -9,6 +9,7 @@ export const PROVIDERS = [
   { id: "deepgram", label: "Deepgram", keychain: true, summarize: false, chat: false, transcribe: true },
   { id: "groq", label: "Groq", keychain: true, summarize: false, chat: false, transcribe: true },
   { id: "local", label: "Local", keychain: false, summarize: true, chat: true, transcribe: true },
+  { id: "parakeet", label: "Parakeet", keychain: false, summarize: false, chat: false, transcribe: true },
 ] as const;
 
 type Spec = (typeof PROVIDERS)[number];

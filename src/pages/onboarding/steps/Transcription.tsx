@@ -2,14 +2,11 @@
 //
 // The local-vs-cloud fork. TWO CARDS, not a provider list:
 //
-//   Card A — "On-device": private, free, offline. Model is chosen by the
-//     step-3 `language` setting (Norwegian → nb-whisper-large-q5, else
-//     large-v3-turbo-q5) and so is DERIVED, not stored. Whenever this card is
-//     the selected one, an effect keeps transcribe_config.default in agreement
-//     with that derived model and fetches it — including when the user goes
-//     back and changes the language, which used to leave the card advertising
-//     one model while the config still routed to another (#148). Clicking the
-//     card selects it and asks for the model; the effect owns the config.
+//   Card A — "On-device": private, free, offline. Model is the multilingual
+//     Whisper turbo default, so it is DERIVED, not stored. Whenever this card
+//     is the selected one, an effect keeps transcribe_config.default in
+//     agreement with that model and fetches it (#148). Clicking the card
+//     selects it and asks for the model; the effect owns the config.
 //   Card B — "Cloud API": provider dropdown (OpenAI / Deepgram / Groq) +
 //     key field with Save + Test. A passed Test writes transcribe_config
 //     .default = that provider with the same default model Settings uses.
@@ -57,16 +54,9 @@ import { StepShell } from "../StepShell";
 import { Select } from "../../../components/ui/Select";
 
 // ---- Model routing (mirrors design/ONBOARDING.md § 4) ---------------------
-// Norwegian meetings get the National Library's NB Whisper; everything else
-// gets the multilingual turbo default. IDs match the backend registry
-// (src-tauri/src/local_whisper.rs).
-const NB_MODEL_ID = "nb-whisper-large-q5";
+// Every language gets the multilingual Whisper turbo default. The ID matches
+// the backend registry (src-tauri/src/local_whisper.rs).
 const DEFAULT_MODEL_ID = "large-v3-turbo-q5";
-
-function modelIdForLanguage(language: string | null): string {
-  const l = (language ?? "").toLowerCase();
-  return l === "no" || l === "nb" || l === "nn" ? NB_MODEL_ID : DEFAULT_MODEL_ID;
-}
 
 // The local ProviderConfig Settings writes — same preset + gpu defaults.
 function localConfig(modelId: string): ProviderConfig {
@@ -115,10 +105,6 @@ async function writeDefaultProvider(next: ProviderConfig) {
 }
 
 export function TranscriptionStep({ ctx }: { ctx: StepContext }) {
-  const [language, setLanguage] = useState<string | null>(null);
-  // Whether `language` reflects a successful read. Only then may the reconcile
-  // effect rewrite a stored config on its own initiative.
-  const [languageKnown, setLanguageKnown] = useState(false);
   const [arch, setArch] = useState<string | null>(null);
   const [models, setModels] = useState<LocalWhisperModelStatus[] | null>(null);
 
@@ -142,43 +128,30 @@ export function TranscriptionStep({ ctx }: { ctx: StepContext }) {
   const [cloudProvider, setCloudProvider] = useState<CloudTranscribeProvider>("openai");
   const key = useProviderKey(cloudProvider);
 
-  const modelId = modelIdForLanguage(language);
+  const modelId = DEFAULT_MODEL_ID;
   const chosenModel = models?.find((m) => m.id === modelId) ?? null;
-  const isNorwegian = modelId === NB_MODEL_ID;
   const isIntel = arch !== null && arch !== "aarch64";
 
   // This step's slice of the global download state.
   const mine = activeDownload?.modelId === modelId ? activeDownload : null;
   const myError = downloadFailure?.modelId === modelId ? downloadFailure.message : null;
 
-  // Load language, arch, and the model registry (for honest sizes + the
+  // Load arch and the model registry (for honest sizes + the
   // already-downloaded check). Then reconcile local state: if the chosen
   // model is already downloaded, treat local as complete; if a download is
   // in flight (navigated back), reflect that.
   useEffect(() => {
     let cancelled = false;
     Promise.all([
-      // `read: false` distinguishes "the read failed" from "the setting is
-      // unset". Both used to collapse to null, and null routes to the
-      // multilingual default — so a failed read would have let the reconcile
-      // effect below "correct" a perfectly good Norwegian config down to the
-      // default model and fetch a gigabyte to do it.
-      ipc
-        .getSetting("language")
-        .then((v) => ({ read: true, value: v }))
-        .catch(() => ({ read: false, value: null as string | null })),
       ipc.systemArch().catch(() => "aarch64"),
       ipc.localWhisperModels().catch(() => [] as LocalWhisperModelStatus[]),
       ipc.getTranscribeConfig().catch(() => null),
-    ]).then(async ([langRead, a, ms, cfg]) => {
+    ]).then(async ([a, ms, cfg]) => {
       if (cancelled) return;
-      const lang = langRead.value;
-      setLanguage(lang);
-      setLanguageKnown(langRead.read);
       setArch(a);
       setModels(ms);
 
-      const wantId = modelIdForLanguage(lang);
+      const wantId = DEFAULT_MODEL_ID;
       const already = ms.find((m) => m.id === wantId)?.downloaded ?? false;
 
       // Pre-select from live config so a resuming user sees their prior
@@ -188,8 +161,8 @@ export function TranscriptionStep({ ctx }: { ctx: StepContext }) {
       if (cfg?.default.provider === "local") {
         setSelection("local");
         // Seed the commit guard with what's actually stored, so the reconcile
-        // effect can tell "already agrees" (write nothing) from "the language
-        // moved on since" (rewrite + fetch the new model).
+        // effect can tell "already agrees" (write nothing) from "a different
+        // model was stored" (rewrite + fetch the default).
         committedModelRef.current = cfg.default.model_id;
         if (already) setDownloadDone(true);
         return;
@@ -276,7 +249,7 @@ export function TranscriptionStep({ ctx }: { ctx: StepContext }) {
 
   // The model whose config has been persisted and whose download has been
   // kicked off. Seeded from the stored config on mount, so resuming a step
-  // that already agrees with the language writes nothing.
+  // that already agrees with it writes nothing.
   const committedModelRef = useRef<string | null>(null);
 
   // Per-mount dedup for download starts. `startDownload` already no-ops for an
@@ -294,8 +267,7 @@ export function TranscriptionStep({ ctx }: { ctx: StepContext }) {
 
   // Persist transcribe_config.default = local + `id`, preserving any
   // per-language overrides, and fetch that model. Driven by the effect below,
-  // so choosing the card and having the language change under it are the same
-  // code path.
+  // so choosing the card and resuming a stored config are the same code path.
   const commitLocalModel = useCallback(
     async (id: string) => {
       if (committedModelRef.current === id) return;
@@ -305,8 +277,8 @@ export function TranscriptionStep({ ctx }: { ctx: StepContext }) {
         setConfigError(null);
       } catch (e) {
         // Clear the claim so re-selecting the card retries, and SAY SO on the
-        // card. Swallowing this was the whole bug: a card advertising NB Whisper
-        // over a config still routing to the default model IS #148 again.
+        // card. Swallowing this was the whole bug: a card advertising one model
+        // over a config still routing to another IS #148 again.
         // Continue stays enabled regardless — deliberately, it must not become
         // harder to proceed than before — so silence here would let the user
         // walk out with the wrong model and nothing on screen to say so.
@@ -339,23 +311,15 @@ export function TranscriptionStep({ ctx }: { ctx: StepContext }) {
     requestDownload(modelId);
   }
 
-  // #148 — the advertised model is DERIVED from the meeting language, but the
-  // config used to be written only by the click handler. Changing the language
-  // after choosing On-device therefore left the card promising NB Whisper while
-  // the stored config still routed to the multilingual turbo model, Continue
-  // enabled and NB Whisper never fetched — silently the wrong model. Keeping
-  // the two in agreement is this effect's whole job; `committedModelRef` makes
-  // it a no-op whenever they already agree, which matters because this step
-  // re-renders on every download-store tick.
+  // #148 — the advertised model is fixed, but the config used to be written
+  // only by the click handler. Keeping the two in agreement is this effect's
+  // whole job; `committedModelRef` makes it a no-op whenever they already
+  // agree, which matters because this step re-renders on every download-store
+  // tick.
   useEffect(() => {
     if (selection !== "local") return;
-    // Only reconcile on our own initiative once the language is actually known.
-    // An unread language falls back to the multilingual default, which would
-    // otherwise "correct" a good Norwegian config down to it. A click still
-    // commits, so a failed read costs nothing the user asked for.
-    if (!languageKnown) return;
     void commitLocalModel(modelId);
-  }, [selection, modelId, languageKnown, commitLocalModel]);
+  }, [selection, modelId, commitLocalModel]);
 
   function selectCloud() {
     setSelection("cloud");
@@ -395,11 +359,9 @@ export function TranscriptionStep({ ctx }: { ctx: StepContext }) {
     selection === "local" || (selection === "cloud" && key.result?.ok === true);
 
   // arch and models always resolve (their fetches fall back on error), so
-  // this only covers the initial IPC round-trip. `language` is deliberately
-  // NOT part of the gate: it stays null when the setting is unset or the
-  // read fails, and modelIdForLanguage(null) already falls back to the
-  // multilingual default — gating on it disabled the On-device card forever
-  // on fresh installs.
+  // this only covers the initial IPC round-trip. Language is not part of the
+  // gate: the on-device model is fixed, so gating on a language setting
+  // disabled the On-device card forever on fresh installs.
   const loading = arch === null || models === null;
 
   return (
@@ -445,11 +407,6 @@ export function TranscriptionStep({ ctx }: { ctx: StepContext }) {
                   : "one-time"}{" "}
                 model.
               </p>
-              {isNorwegian && (
-                <p className="mt-1 text-xs leading-relaxed text-[var(--color-text-muted)]">
-                  Norwegian model — trained by the National Library of Norway.
-                </p>
-              )}
               {isIntel && (
                 <p className="mt-1 text-xs leading-relaxed text-[var(--color-warning-text)]">
                   On-device transcription is slow on Intel Macs.

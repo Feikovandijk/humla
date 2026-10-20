@@ -25,6 +25,7 @@ mod tests {
         assert_eq!(keychain_account_for("deepgram"), Some("deepgram_api_key"));
         assert_eq!(keychain_account_for("groq"), Some("groq_api_key"));
         assert_eq!(keychain_account_for("local"), None);
+        assert_eq!(keychain_account_for("parakeet"), None);
         assert_eq!(keychain_account_for("nonsense"), None);
     }
 }

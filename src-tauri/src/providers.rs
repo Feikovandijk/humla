@@ -13,6 +13,8 @@ pub enum ProviderId {
     /// Local Whisper for transcription; any OpenAI-compatible server (Ollama,
     /// LM Studio, llama-server) for summaries and chat.
     Local,
+    /// Parakeet Ultra through FluidAudio/CoreML on the Neural Engine.
+    Parakeet,
 }
 
 /// How a provider's key rides on a request.
@@ -117,6 +119,14 @@ pub const REGISTRY: &[ProviderSpec] = &[
         key_test: None,
         capabilities: Capabilities { summarize: true, chat: true, transcribe: true },
     },
+    ProviderSpec {
+        id: ProviderId::Parakeet,
+        id_str: "parakeet",
+        label: "Parakeet",
+        keychain_account: None,
+        key_test: None,
+        capabilities: Capabilities { summarize: false, chat: false, transcribe: true },
+    },
 ];
 
 /// The chat setting stores the local provider as `ollama` from before the
@@ -197,6 +207,7 @@ mod tests {
         assert_eq!(ProviderId::Deepgram.keychain_account(), Some("deepgram_api_key"));
         assert_eq!(ProviderId::Groq.keychain_account(), Some("groq_api_key"));
         assert_eq!(ProviderId::Local.keychain_account(), None);
+        assert_eq!(ProviderId::Parakeet.keychain_account(), None);
     }
 
     #[test]

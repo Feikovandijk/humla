@@ -10,9 +10,11 @@ import Foundation
 //
 //   speaker-diarize <wav-path> [--engine community1|nemotron3] [--num-speakers N] [--threshold T]
 //   speaker-diarize status|download|delete [--engine community1|nemotron3]
+//   speaker-diarize asr-status|asr-download|asr-delete|asr-serve
 //
 // `--num-speakers` and `--threshold` apply to community-1 only: Nemotron 3 counts
-// speakers itself, up to eight.
+// speakers itself, up to eight. The `asr-*` commands run Parakeet Ultra for
+// Parakeet transcription; `asr-serve` reads JSON lines from stdin.
 
 let args = CommandLine.arguments
 
@@ -57,7 +59,7 @@ func writePayload(_ payload: [[String: Any]]) throws {
 
 func usage() -> Never {
     writeStderr(
-        "usage: speaker-diarize (<wav-path>|status|download|delete) [--engine community1|nemotron3] [--num-speakers N] [--threshold T]"
+        "usage: speaker-diarize (<wav-path>|status|download|delete|asr-status|asr-download|asr-delete|asr-serve) [--engine community1|nemotron3] [--num-speakers N] [--threshold T]"
     )
     exit(2)
 }
@@ -334,6 +336,123 @@ func runDownloadNemotron() async -> Int32 {
     }
 }
 
+// MARK: - Parakeet Ultra ASR
+
+// The same CoreML cache root FluidAudio uses for all its models. `.ultra` is
+// moondream's full-precision post-training of Parakeet TDT v3: same 25
+// languages and API, better WER at the same speed.
+let asrVersion: AsrModelVersion = .ultra
+
+func asrModelsDirectory() -> URL {
+    AsrModels.defaultCacheDirectory(for: asrVersion)
+}
+
+func asrFilesPresent() -> Bool {
+    AsrModels.modelsExist(at: asrModelsDirectory(), version: asrVersion)
+}
+
+func asrWarmMarker() -> URL {
+    asrModelsDirectory().appendingPathComponent(".humla-asr-warm-\(markerIdentity)")
+}
+
+func asrWarmStamp() -> String {
+    [
+        "parakeet-ultra",
+        osBuild(),
+        sidecarVersion(),
+    ].joined(separator: " ")
+}
+
+func runAsrStatus() {
+    let dir = asrModelsDirectory()
+    let present = asrFilesPresent()
+    let ready = present && readMarker(asrWarmMarker()) == asrWarmStamp()
+    writeStdout([
+        "downloaded": ready,
+        "needsWarmUp": present && !ready,
+        "warmUpError": NSNull(),
+        "path": dir.path,
+        "sizeBytes": present ? directorySize(dir) : NSNull(),
+    ] as [String: Any])
+}
+
+func runAsrDelete() {
+    let dir = asrModelsDirectory()
+    if FileManager.default.fileExists(atPath: dir.path) {
+        try? FileManager.default.removeItem(at: dir)
+    }
+    writeStdout(["deleted": true, "path": dir.path])
+}
+
+func runAsrDownload() async -> Int32 {
+    do {
+        let models = try await AsrModels.downloadAndLoad(
+            version: asrVersion,
+            progressHandler: forwardDownloadProgress
+        )
+        // The first Neural Engine load compiles the model for this Mac. Run one
+        // short inference here so that compile lands in the download, not in the
+        // first chunk of a meeting.
+        writeProgress(fraction: 0, phase: "warming")
+        let manager = AsrManager(config: .default)
+        try await manager.loadModels(models)
+        var state = TdtDecoderState.make()
+        _ = try await manager.transcribe(
+            [Float](repeating: 0, count: 16_000), decoderState: &state)
+        try Data((asrWarmStamp() + "\n").utf8)
+            .write(to: asrWarmMarker(), options: .atomic)
+        writeStdout(["event": "done"])
+        return 0
+    } catch {
+        writeDownloadFailure(error, filesOnDisk: asrFilesPresent())
+        return 1
+    }
+}
+
+/// Long-lived ASR server: load once, then one JSON request per stdin line.
+/// Exits when stdin closes, which is how the app's `_exit(0)` reaps us.
+func runAsrServe() async -> Int32 {
+    guard asrFilesPresent() else {
+        writeStdout(["event": "error", "error": "Parakeet Ultra model not downloaded"])
+        return 1
+    }
+    let asrManager: AsrManager
+    do {
+        let models = try await AsrModels.load(from: asrModelsDirectory(), version: asrVersion)
+        asrManager = AsrManager(config: .default)
+        try await asrManager.loadModels(models)
+        writeStdout(["event": "ready"])
+    } catch {
+        writeStdout(["event": "error", "error": error.localizedDescription])
+        return 1
+    }
+
+    while let line = readLine() {
+        guard let data = line.data(using: .utf8),
+              let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let path = request["path"] as? String else {
+            continue
+        }
+        let id = request["id"] as? String ?? ""
+        do {
+            var state = TdtDecoderState.make()
+            let result = try await asrManager.transcribe(
+                URL(fileURLWithPath: path), decoderState: &state)
+            let words = buildWordTimings(from: result.tokenTimings ?? []).map { word in
+                [
+                    "text": word.word,
+                    "start_ms": Int((word.startTime * 1000).rounded()),
+                    "end_ms": Int((word.endTime * 1000).rounded()),
+                ] as [String: Any]
+            }
+            writeStdout(["id": id, "text": result.text, "words": words])
+        } catch {
+            writeStdout(["id": id, "error": error.localizedDescription])
+        }
+    }
+    return 0
+}
+
 // MARK: - Diarize: community-1
 
 func runDiarizeCommunity1(audioPath: String, numSpeakers: Int?, threshold: Double?) async -> Int32 {
@@ -422,6 +541,22 @@ case "status":
     runStatus()
 case "delete":
     runDelete()
+case "asr-status":
+    runAsrStatus()
+case "asr-delete":
+    runAsrDelete()
+case "asr-download":
+    Task {
+        exitCode = await runAsrDownload()
+        semaphore.signal()
+    }
+    semaphore.wait()
+case "asr-serve":
+    Task {
+        exitCode = await runAsrServe()
+        semaphore.signal()
+    }
+    semaphore.wait()
 case "download":
     Task {
         switch engine {

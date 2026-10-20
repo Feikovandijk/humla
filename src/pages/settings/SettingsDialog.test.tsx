@@ -781,3 +781,41 @@ describe("settings dialog", () => {
     expect(screen.getByTestId("location")).toHaveTextContent(/^\/$/);
   });
 });
+
+
+describe("Parakeet with local-only settings", () => {
+  it("keeps the chosen on-device engine and its language overrides", async () => {
+    const config: TranscribeConfig = {
+      default: { provider: "parakeet", model: "ultra" },
+      per_language: { nl: { provider: "parakeet", model: "ultra" } },
+    };
+    const writes: unknown[] = [];
+    renderApp("/settings?tab=transcription", {
+      get_transcribe_config: () => config,
+      set_transcribe_config: (args) => writes.push(args),
+      parakeet_status: () => ({ downloaded: true, needsWarmUp: false, warmUpError: null, sizeBytes: 630_000_000, path: "/parakeet" }),
+    });
+    const dialog = await screen.findByRole("dialog", { name: /settings/i });
+    await waitFor(() => expect(within(dialog).getByRole("radio", { name: /parakeet ultra/i })).toBeChecked());
+    expect(writes).toEqual([]);
+    await userEvent.click(within(dialog).getAllByRole("button", { name: /advanced/i })[0]);
+    expect(within(dialog).getByText("Parakeet · ultra")).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(/api key/i)).not.toBeInTheDocument();
+  });
+
+  it("offers downloaded Parakeet for a new language override without Whisper models", async () => {
+    const writes: { config: TranscribeConfig }[] = [];
+    renderApp("/settings?tab=transcription", {
+      parakeet_status: () => ({ downloaded: true, needsWarmUp: false, warmUpError: null, sizeBytes: 630_000_000, path: "/parakeet" }),
+      set_transcribe_config: (args) => writes.push(args as { config: TranscribeConfig }),
+    });
+    const dialog = await screen.findByRole("dialog", { name: /settings/i });
+    await within(dialog).findByRole("radiogroup", { name: "Local models" });
+    await userEvent.click(within(dialog).getAllByRole("button", { name: /advanced/i })[0]);
+    await userEvent.click(within(dialog).getByRole("button", { name: /add language override/i }));
+    const add = within(dialog).getByRole("button", { name: "Add" });
+    expect(add).toBeEnabled();
+    await userEvent.click(add);
+    await waitFor(() => expect(writes.at(-1)?.config.per_language.en).toEqual({ provider: "parakeet", model: "ultra" }));
+  });
+});
