@@ -330,6 +330,11 @@ pub fn open(path: &Path) -> Result<Connection> {
     // cache, not a record — rebuildable from the text at any time, and destroyed
     // with the note that produced them.
     let _ = conn.execute("ALTER TABLE notes ADD COLUMN speakers TEXT NOT NULL DEFAULT ''", []);
+    // Transcript cleanup: an LLM-cleaned reading copy. Derived, local-only, never synced.
+    let _ = conn.execute(
+        "ALTER TABLE notes ADD COLUMN clean_transcript TEXT NOT NULL DEFAULT ''",
+        [],
+    );
     let _ =
         conn.execute("ALTER TABLE note_chunks ADD COLUMN speakers TEXT NOT NULL DEFAULT ''", []);
     // Which chunker produced this row (issue #122). This is the sentinel #104 lacked:
@@ -831,6 +836,17 @@ pub fn set_detected_language(conn: &Connection, id: &str, code: &str) -> Result<
         "UPDATE notes SET detected_language = ?1 WHERE id = ?2",
         params![code, id],
     )?;
+    Ok(())
+}
+
+/// The LLM-cleaned copy of a note's transcript. Derived and local-only like
+/// `detected_language`: never synced, never bumps `updated_at`.
+pub fn get_clean_transcript(conn: &Connection, id: &str) -> Result<String> {
+    Ok(conn.query_row("SELECT clean_transcript FROM notes WHERE id = ?1", params![id], |r| r.get(0))?)
+}
+
+pub fn set_clean_transcript(conn: &Connection, id: &str, text: &str) -> Result<()> {
+    conn.execute("UPDATE notes SET clean_transcript = ?1 WHERE id = ?2", params![text, id])?;
     Ok(())
 }
 

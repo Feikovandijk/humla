@@ -17,17 +17,13 @@ import { CHAT_CAPABLE, SUMMARY_CAPABLE, type Provider } from "../../lib/provider
 // bookkeeping keys (owned by the wizard shell, never surfaced in Settings).
 export type EditableKey = Exclude<
   SettingsKey,
-  // `telemetry_enabled` is excluded for the same reason as theme/palette: it is
-  // owned by its own self-contained row (which must distinguish UNSET from "false"),
-  // not by the generic settings map, whose DEFAULTS would collapse that distinction.
-  // `record_hotkey` is excluded on the same grounds: it is written through
+  // `record_hotkey` is excluded because it is written through
   // `recordHotkeySet` (which registers it with the OS first and can fail), not
   // through the generic settings map.
   | "theme"
   | "palette"
   | "onboarding_completed"
   | "onboarding_step"
-  | "telemetry_enabled"
   | "record_hotkey"
   // Owned by Home's offer card (src/lib/nemotronOffer.ts).
   | "nemotron_offer"

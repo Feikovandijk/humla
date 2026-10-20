@@ -180,12 +180,7 @@ export type SettingsKey =
   // plain settings rows so the grandfathering migration and the frontend
   // takeover guard read the same source of truth.
   | "onboarding_completed"
-  | "onboarding_step"
-  // Anonymous onboarding counters. UNSET MEANS OFF — that is what grandfathers
-  // installs made before the feature existed (they were promised no telemetry and
-  // never see the wizard again). Written by the wizard footer, which is also the
-  // disclosure, so the user is always told before anything is sent.
-  | "telemetry_enabled";
+  | "onboarding_step";
 
 export type TranscribeProvider = Provider;
 
@@ -421,10 +416,6 @@ export const ipc = {
    *  first (`flushEdits`), or the receiver gets an older copy. */
   webhookSendNote: (noteId: string) => invoke<void>("webhook_send_note", { noteId }),
   setSetting: (key: SettingsKey, value: string) => invoke<void>("settings_set", { key, value }),
-  /** Report one anonymous milestone. Fire-and-forget: the backend gates on the
-   *  setting and on a once-per-install marker, so callers may call it freely and
-   *  never need to know whether anything was sent. */
-  telemetryEvent: (event: string) => invoke<void>("telemetry_event", { event }),
   /** The global record accelerator in force (`""` = off). */
   recordHotkeyGet: () => invoke<string>("record_hotkey_get"),
   /** Register `accel` (`""` clears) and persist it. Rejects when the OS refuses
@@ -648,6 +639,11 @@ export const ipc = {
   // title is deliberately left as it was.
   noteGenerateTitle: (noteId: string, force: boolean) =>
     invoke<string | null>("note_generate_title", { noteId, force }),
+  // LLM-cleaned reading copy of the transcript; the raw one is never touched.
+  cleanTranscript: (noteId: string) => invoke<string>("note_clean_transcript", { noteId }),
+  getCleanTranscript: (noteId: string) => invoke<string>("note_clean_transcript_get", { noteId }),
+  setCleanTranscript: (noteId: string, text: string) =>
+    invoke<void>("note_clean_transcript_set", { noteId, text }),
 
   // AI chat over a single Note (issue #46). `chatSend` runs one grounded,
   // streamed completion — the answer arrives via chat_* events, so the
