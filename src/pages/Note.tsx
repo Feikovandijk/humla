@@ -369,7 +369,7 @@ export function Note() {
   readOnlyRef.current = readOnly;
   const [billingOpen, setBillingOpen] = useState(false);
   const [uiLang, setUiLang] = useState<string>("en");
-  const [globalProvider, setGlobalProvider] = useState<string>("openai");
+  const globalProvider = useLiveSetting("summary_provider") || "local";
   // Device-wide audio retention (#24). Off is the shipped default, so an
   // unresolved read means off — don't promise a player that isn't coming. Read
   // through the settings bus, not a plain fetch: Settings is a dialog over a
@@ -475,9 +475,6 @@ export function Note() {
     ipc.getSetting("language").then((v) => {
       if (!cancelled && v) setUiLang(v);
     });
-    ipc.getSetting("summary_provider").then((v) => {
-      if (!cancelled && v) setGlobalProvider(v);
-    });
     return () => {
       cancelled = true;
     };
@@ -559,7 +556,7 @@ export function Note() {
   const effectiveProvider =
     draft?.summary_provider && draft.summary_provider.length > 0
       ? draft.summary_provider
-      : globalProvider || "openai";
+      : globalProvider || "local";
   const isLocalProvider = effectiveProvider === "local";
 
   const recPhase = useRecordingStore((s) => s.status);

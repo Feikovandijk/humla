@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ipc,
   onDiarizeDownloadProgress,
@@ -69,6 +69,8 @@ export function useSettings() {
     default: { provider: "local", model_id: "large-v3-turbo-q5", preset: "quality", use_gpu: true },
     per_language: {},
   });
+  const transcribeConfigRef = useRef(transcribeConfig);
+  transcribeConfigRef.current = transcribeConfig;
 
   useEffect(() => {
     let cancelled = false;
@@ -82,6 +84,7 @@ export function useSettings() {
       setLocal((p) => ({ ...p, models }));
       if (cfg) {
         const local = pinTranscribeLocal(cfg);
+        transcribeConfigRef.current = local;
         setTranscribeConfig(local);
         if (local !== cfg) void ipc.setTranscribeConfig(local).catch(() => {});
       }
@@ -255,14 +258,15 @@ export function useSettings() {
       // model_id. Language-specific models never become the default;
       // they're picked via per-language overrides. Only fires when the
       // user is on the local provider.
+      const currentCfg = transcribeConfigRef.current;
       const downloadedInfo = models.find((m) => m.id === modelId);
       if (
         downloadedInfo?.kind === "multilingual" &&
         models.filter((m) => m.kind === "multilingual" && m.downloaded).length === 1 &&
-        transcribeConfig.default.provider === "local"
+        currentCfg.default.provider === "local"
       ) {
         await setDefaultConfig({
-          ...transcribeConfig.default,
+          ...currentCfg.default,
           model_id: modelId,
         });
       }
@@ -276,7 +280,7 @@ export function useSettings() {
         downloaded?.kind === "language_specific" &&
         downloaded.specificLanguage &&
         LANGUAGES.some((language) => language.value === downloaded.specificLanguage) &&
-        !(downloaded.specificLanguage in transcribeConfig.per_language)
+        !(downloaded.specificLanguage in transcribeConfigRef.current.per_language)
       ) {
         flashLocal({
           kind: "suggest_language_override",
@@ -311,15 +315,16 @@ export function useSettings() {
       // the first still-downloaded multilingual (or the registry default
       // if none). Language-specific entries aren't candidates here —
       // they're picked via per-language overrides.
+      const currentCfg = transcribeConfigRef.current;
       if (
-        transcribeConfig.default.provider === "local" &&
-        transcribeConfig.default.model_id === modelId
+        currentCfg.default.provider === "local" &&
+        currentCfg.default.model_id === modelId
       ) {
         const fallback =
           models.find((m) => m.kind === "multilingual" && m.downloaded)?.id ??
           "large-v3-turbo-q5";
         await setDefaultConfig({
-          ...transcribeConfig.default,
+          ...currentCfg.default,
           model_id: fallback,
         });
       }
@@ -362,6 +367,7 @@ export function useSettings() {
   }
 
   async function updateTranscribeConfig(cfg: TranscribeConfig) {
+    transcribeConfigRef.current = cfg;
     setTranscribeConfig(cfg);
     try {
       await ipc.setTranscribeConfig(cfg);
@@ -373,24 +379,33 @@ export function useSettings() {
   // Convenience for the Default provider section. Only mutates the
   // `default` slot; per-language overrides untouched.
   async function setDefaultConfig(cfg: ProviderConfig) {
-    await updateTranscribeConfig({ ...transcribeConfig, default: cfg });
+    await updateTranscribeConfig({ ...transcribeConfigRef.current, default: cfg });
   }
 
   // Add or replace a per-language override.
   async function setLanguageOverride(language: string, cfg: ProviderConfig) {
+    const current = transcribeConfigRef.current;
     await updateTranscribeConfig({
-      ...transcribeConfig,
-      per_language: { ...transcribeConfig.per_language, [language]: cfg },
+      ...current,
+      per_language: { ...current.per_language, [language]: cfg },
     });
+    if (
+      local.flash?.kind === "suggest_language_override" &&
+      local.flash.language === language
+    ) {
+      const langLabel = LANGUAGES.find((l) => l.value === language)?.label ?? language;
+      flashLocal({ kind: "info", message: `Added ${langLabel} override.` });
+    }
   }
 
   // Remove a per-language override entirely. No-op if the language
   // isn't currently mapped.
   async function removeLanguageOverride(language: string) {
-    if (!(language in transcribeConfig.per_language)) return;
-    const next = { ...transcribeConfig.per_language };
+    const current = transcribeConfigRef.current;
+    if (!(language in current.per_language)) return;
+    const next = { ...current.per_language };
     delete next[language];
-    await updateTranscribeConfig({ ...transcribeConfig, per_language: next });
+    await updateTranscribeConfig({ ...current, per_language: next });
   }
 
   // Provider API keys moved out of this hook entirely: ProviderKeyCard

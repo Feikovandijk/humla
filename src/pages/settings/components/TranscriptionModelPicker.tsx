@@ -13,9 +13,12 @@ const TAG: Record<string, string> = {
   "medium-q5": "Fastest",
 };
 
+function languageName(code: string | null) {
+  return LANGUAGES.find((l) => l.value === code)?.label ?? code ?? "One language";
+}
+
 function languageOnly(code: string | null) {
-  const name = LANGUAGES.find((l) => l.value === code)?.label ?? code ?? "One language";
-  return `${name} only`;
+  return `${languageName(code)} only`;
 }
 
 const iconBtn =
@@ -41,12 +44,14 @@ export function TranscriptionModelPicker({
 }) {
   const active = useDownloadStore((s) => s.active);
   const current = value.provider === "local" ? value.model_id : null;
+  const anyDownloading = active !== null || Object.keys(local.downloading).length > 0;
 
   return (
     <div className="py-3.5">
       <div role="radiogroup" aria-label="Local models">
         {local.models.map((m) => {
-          const mine = active?.modelId === m.id ? active : null;
+          const mine =
+            active?.modelId === m.id ? active : (local.downloading[m.id] ?? null);
           const pct = mine?.total ? Math.round((mine.received / mine.total) * 100) : 0;
           const multilingual = m.kind === "multilingual";
           const selected = current === m.id;
@@ -117,7 +122,7 @@ export function TranscriptionModelPicker({
                 <button
                   type="button"
                   onClick={() => onDownload(m.id)}
-                  disabled={active !== null}
+                  disabled={anyDownloading}
                   aria-label={`Download ${m.label}`}
                   className={iconBtn}
                 >
@@ -150,7 +155,7 @@ export function TranscriptionModelPicker({
               type="button"
               onClick={() => {
                 if (local.flash?.kind !== "suggest_language_override") return;
-                setLanguageOverride(local.flash.language, {
+                void setLanguageOverride(local.flash.language, {
                   provider: "local",
                   model_id: local.flash.modelId,
                   preset: "quality",
@@ -159,7 +164,7 @@ export function TranscriptionModelPicker({
               }}
               className="ml-auto text-xs px-2 py-1 rounded border border-[var(--color-line)] hover:bg-[var(--color-canvas)] whitespace-nowrap"
             >
-              Add as override
+              Add as {languageName(local.flash.language)} override
             </button>
           )}
         </div>
