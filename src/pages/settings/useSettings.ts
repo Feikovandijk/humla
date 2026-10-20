@@ -9,6 +9,7 @@ import {
   type TranscribeConfig,
 } from "../../lib/ipc";
 import { DIARIZE_ENGINE_LABEL, DIARIZE_ENGINES } from "../../lib/diarizeEngine";
+import { LANGUAGES } from "../../lib/languages";
 import { onSettingChange, writeSetting } from "../../lib/settingsBus";
 import {
   DEFAULTS,
@@ -238,6 +239,7 @@ export function useSettings() {
       if (
         downloaded?.kind === "language_specific" &&
         downloaded.specificLanguage &&
+        LANGUAGES.some((language) => language.value === downloaded.specificLanguage) &&
         !(downloaded.specificLanguage in transcribeConfig.per_language)
       ) {
         flashLocal({

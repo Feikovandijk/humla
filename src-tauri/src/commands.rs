@@ -75,7 +75,7 @@ use api_keys::read_provider_api_key;
 use models::local_model_path;
 use transcription_config::read_transcribe_config;
 
-pub(crate) const DEFAULT_LANGUAGE: &str = "no";
+pub(crate) const DEFAULT_LANGUAGE: &str = "en";
 // The diarization engine when `diarize_model` is unset. Only a fresh install
 // has no row, since `db::migrate_diarize_engine` writes one for every other.
 // Mirrored by `DEFAULT_DIARIZE_ENGINE` in `src/lib/diarizeEngine.ts`.
@@ -2569,6 +2569,7 @@ pub async fn recording_start(
 
             let stale = s.child.take();
             s.note_id = None;
+            s.language_choice = None;
             s.temp_dir = None;
             s.reader = None;
             s.inflight = Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -2600,33 +2601,11 @@ pub async fn recording_start(
         return Err(msg);
     }
 
-    // Pre-check the configured provider's prerequisites (API key / local model
-    // present) and fire the local-Whisper prewarm. Shared with `import_audio`.
-    //
-    // Still checked when transcription is deferred (#146): the provider that
-    // will run later is the one configured now, and finding out at Transcribe
-    // time that no model is downloaded would mean the meeting was captured
-    // against a pipeline that was never going to work.
-    let provider_cfg = ensure_provider_ready(&app, &state, &note_id).await?;
-
-    // "Transcribe manually" (#146), decided once per recording: flipping the
-    // setting mid-meeting must not change a capture already running, since half
-    // a transcript is worse than either regime.
-    //
-    // Only for on-device Whisper. What the setting buys is a Mac that isn't
-    // running Metal inference for the length of a meeting; a cloud provider
-    // dispatches over the network and costs the machine nothing, so deferring
-    // there would trade a live transcript for no saving at all. Resolved
-    // through the note's own language, so a per-language override that routes
-    // this note to Deepgram keeps its live transcript while a Norwegian note on
-    // local Whisper defers.
-    let sink_mode = if matches!(provider_cfg, crate::stt::ProviderConfig::Local(_))
-        && deferred_transcription_enabled(&app)
-    {
-        SinkMode::Deferred
-    } else {
-        SinkMode::Live
-    };
+    // At least one offered language must work before capture starts. An old
+    // note's language can point to an unrelated provider, so do not check it.
+    if ensure_provider_ready(&app, &state, &note_id, Some("en")).await.is_err() {
+        ensure_provider_ready(&app, &state, &note_id, Some("nl")).await?;
+    }
 
     // Pre-check microphone permission — without it we can't capture anything useful.
     if let Ok(p) = permissions_status(app.clone()).await {
@@ -2756,9 +2735,13 @@ pub async fn recording_start(
         // A fresh sink per capture: proper nouns and sentence fragments from a
         // different conversation would only confuse this session's decoder,
         // and a straggler chunk from the previous capture must not land in
-        // this one's log. `mode` is decided once, here — flipping the setting
-        // mid-meeting changes nothing about a recording already running.
-        s.sink = Arc::new(CaptureSink::new(sink_mode));
+        // this one's log. The language choice settles the provider and deferred
+        // mode before any chunk transcribes.
+        let (choice, receiver) = tokio::sync::watch::channel(None);
+        let mut sink = CaptureSink::new(SinkMode::Live);
+        sink.language_choice = Some(receiver);
+        s.language_choice = Some(choice);
+        s.sink = Arc::new(sink);
     }
 
     // Snapshot any existing transcript so diarize_and_apply can prepend it
@@ -2811,6 +2794,7 @@ pub async fn recording_start(
                 && s.stop == crate::recording::StopState::None
             {
                 s.note_id = None;
+                s.language_choice = None;
                 s.child = None;
                 s.temp_dir = None;
                 s.reader = None;
@@ -2856,6 +2840,43 @@ pub async fn recording_start(
     }
 
     emit_status(&app, Some(&note_id), Phase::Recording);
+    crate::menubar::show_main_window(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn recording_select_language(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    note_id: String,
+    session_id: String,
+    language: String,
+) -> Result<(), String> {
+    if !matches!(language.as_str(), "en" | "nl") {
+        return Err("Choose English or Dutch.".into());
+    }
+    let provider = ensure_provider_ready(&app, &state, &note_id, Some(&language)).await?;
+    // Freeze this choice for the take, including whether its provider defers.
+    let deferred = matches!(provider, crate::stt::ProviderConfig::Local(_))
+        && deferred_transcription_enabled(&app);
+    {
+        let s = state.recording.lock();
+        if s.note_id.as_deref() != Some(&note_id)
+            || s.session_id.as_deref() != Some(&session_id)
+            || !s.sink.language_pending()
+        {
+            return Err("This recording is no longer waiting for a language.".into());
+        }
+        let conn = state.db.lock();
+        db::update_note(&conn, &note_id, &db::NotePatch {
+            language: Some(language.clone()),
+            ..Default::default()
+        }).map_err(err)?;
+        s.language_choice.as_ref().ok_or("No language choice pending")?
+            .send_replace(Some(crate::recording::CaptureLanguage { language, deferred }));
+    }
+    state.sync.note_upserted(&note_id);
+    let _ = app.emit("notes_changed", ());
     Ok(())
 }
 
@@ -3504,13 +3525,16 @@ async fn ensure_provider_ready(
     app: &AppHandle,
     state: &State<'_, AppState>,
     note_id: &str,
+    language_override: Option<&str>,
 ) -> Result<crate::stt::ProviderConfig, String> {
     // Resolve the per-language override (if any) up front: both the prereq
     // check and the prewarm use the resolved provider — otherwise a user with a
     // Norwegian override (Local) and an English default (Deepgram) would prewarm
     // the wrong model.
     let transcribe_cfg = read_transcribe_config(state).map_err(|e| e.to_string())?;
-    let language = {
+    let language = if let Some(language) = language_override {
+        language.to_string()
+    } else {
         let conn = state.db.lock();
         let global = db::get_setting(&conn, "language")
             .map_err(err)?
@@ -3548,7 +3572,9 @@ async fn ensure_provider_ready(
         }
     };
     if let Some(msg) = pre_err {
-        emit_error(app, Some(note_id), &msg);
+        if language_override.is_none() {
+            emit_error(app, Some(note_id), &msg);
+        }
         return Err(msg);
     }
 
@@ -3939,7 +3965,7 @@ pub async fn import_audio(
 
     // Provider prereq (key / local model). Skipped vs. recording_start:
     // mic/screen permission + cloud recording lock.
-    ensure_provider_ready(&app, &state, &note_id).await?;
+    ensure_provider_ready(&app, &state, &note_id, None).await?;
 
     emit_status(&app, Some(&note_id), Phase::Importing);
 
@@ -4219,7 +4245,7 @@ async fn transcribe_takes(
     // The provider that runs now is the one configured now, which may not be
     // the one that was configured when the audio was captured. Check before
     // replaying an hour of it.
-    ensure_provider_ready(app, &state, note_id).await?;
+    ensure_provider_ready(app, &state, note_id, None).await?;
 
     // The run's shape, settled before a single chunk decodes: each take's
     // retained streams are replayed one after the other, so a take that kept
@@ -7204,6 +7230,11 @@ async fn transcribe_chunk(
     // the user starts meanwhile.
     sink: Arc<CaptureSink>,
 ) -> anyhow::Result<()> {
+    let selected_language = sink.selected_language().await.map_err(anyhow::Error::msg)?;
+    if !sink.transcribes_on_arrival() {
+        let _ = tokio::fs::remove_file(&path).await;
+        return Ok(());
+    }
     // Resolve dispatch-time data: per-note-or-global language first
     // (drives per-language override resolution), then the resolved
     // provider config, then custom vocabulary + API key. The order
@@ -7216,7 +7247,9 @@ async fn transcribe_chunk(
         let note_language = db::get_note(&conn, &note_id)
             .map(|n| n.language)
             .unwrap_or_default();
-        let language = if note_language.trim().is_empty() {
+        let language = if let Some(selected) = selected_language {
+            selected
+        } else if note_language.trim().is_empty() {
             global_language
         } else {
             note_language
@@ -7506,7 +7539,14 @@ fn emit_stopping_progress(app: &AppHandle, note_id: &str, pending: u32, done: u3
     emit_phase(app, RecordingStatus::stopping_progress(note_id, pending, done));
 }
 
-fn emit_phase(app: &AppHandle, status: RecordingStatus) {
+fn emit_phase(app: &AppHandle, mut status: RecordingStatus) {
+    if matches!(status.phase, Phase::Recording | Phase::Paused) {
+        let state = app.state::<AppState>();
+        let capture = state.recording.lock();
+        if capture.note_id == status.note_id && capture.sink.language_pending() {
+            status.language_session_id = capture.session_id.clone();
+        }
+    }
     let phase = status.phase;
     let _ = app.emit("recording_status", status);
     // The tray's icon and its Start/Stop items are driven from here rather than

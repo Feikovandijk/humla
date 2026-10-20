@@ -274,7 +274,7 @@ describe("settings dialog", () => {
 
     // Open the Language select's listbox.
     const trigger = await within(dialog).findByRole("combobox", {
-      name: /norwegian/i,
+      name: /^english/i,
     });
     await userEvent.click(trigger);
     expect(within(dialog).getByRole("listbox")).toBeInTheDocument();
@@ -316,7 +316,7 @@ describe("settings dialog", () => {
     const dialog = await screen.findByRole("dialog", { name: /settings/i });
 
     const trigger = await within(dialog).findByRole("combobox", {
-      name: /norwegian/i,
+      name: /^english/i,
     });
     await userEvent.click(trigger);
     expect(within(dialog).getByRole("listbox")).toBeInTheDocument();
@@ -446,13 +446,13 @@ describe("settings dialog", () => {
     // Relocated from General (#15): the language sits with the engine that
     // consumes it.
     const trigger = await within(dialog).findByRole("combobox", {
-      name: /norwegian/i,
+      name: /^english/i,
     });
     await userEvent.click(trigger);
     await userEvent.click(
-      within(dialog).getByRole("option", { name: /^english/i }),
+      within(dialog).getByRole("option", { name: /^dutch/i }),
     );
-    expect(writes.language).toBe("en");
+    expect(writes.language).toBe("nl");
 
     // And General no longer offers it.
     await userEvent.click(within(dialog).getByRole("tab", { name: "General" }));
