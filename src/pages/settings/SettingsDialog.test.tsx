@@ -461,17 +461,13 @@ describe("settings dialog", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("per-language overrides and local models sit behind Advanced", async () => {
+  it("per-language overrides sit behind Advanced", async () => {
     renderApp("/settings?tab=transcription");
     const dialog = await screen.findByRole("dialog", { name: /settings/i });
-    await within(dialog).findByText("Provider");
+    await within(dialog).findByRole("tab", { name: "Cloud" });
 
-    // Collapsed: expert routing is out of sight.
     expect(
       within(dialog).queryByText("Per-language overrides"),
-    ).not.toBeInTheDocument();
-    expect(
-      within(dialog).queryByText(/pick a multilingual model/i),
     ).not.toBeInTheDocument();
 
     await userEvent.click(
@@ -481,26 +477,31 @@ describe("settings dialog", () => {
     expect(
       await within(dialog).findByText("Per-language overrides"),
     ).toBeInTheDocument();
-    expect(
-      within(dialog).getByText(/pick a multilingual model/i),
-    ).toBeInTheDocument();
   });
 
-  it("default provider renders as self-describing rows", async () => {
-    renderApp("/settings?tab=transcription");
+  it("default model is picked from a Cloud | Local list, provider by provider", async () => {
+    const writes: unknown[] = [];
+    renderApp("/settings?tab=transcription", {
+      set_transcribe_config: (args) => {
+        writes.push(args);
+        return null;
+      },
+    });
     const dialog = await screen.findByRole("dialog", { name: /settings/i });
 
-    // Every control is a labeled row with an explanation — no bare selects
-    // (maintainer design-review amendment on #15).
-    expect(await within(dialog).findByText("Provider")).toBeInTheDocument();
+    // Opens on Cloud → OpenAI with the stored model checked.
+    const cloud = await within(dialog).findByRole("tab", { name: "Cloud" });
+    expect(cloud).toHaveAttribute("aria-selected", "true");
     expect(
-      within(dialog).getByText(/where audio is transcribed/i),
-    ).toBeInTheDocument();
-    expect(within(dialog).getByText("Model")).toBeInTheDocument();
-    // The selected provider shows in the picker trigger.
-    expect(
-      within(dialog).getByRole("combobox", { name: /openai/i }),
-    ).toBeInTheDocument();
+      within(dialog).getByRole("radio", { name: /whisper-1/ }),
+    ).toHaveAttribute("aria-checked", "true");
+
+    // Browsing a provider changes nothing; picking a row does.
+    await userEvent.click(within(dialog).getByRole("tab", { name: "Deepgram" }));
+    expect(writes).toHaveLength(0);
+    await userEvent.click(within(dialog).getByRole("radio", { name: /nova-2/ }));
+    const write = writes.at(-1) as { config?: { default?: unknown } };
+    expect(write?.config?.default).toEqual({ provider: "deepgram", model: "nova-2" });
   });
 
   it("local provider exposes labeled Quality and Metal rows", async () => {

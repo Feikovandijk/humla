@@ -163,6 +163,22 @@ export function ProviderConfigForm({
       />
 
       {value.provider === "local" && (
+        <LocalTuningRows value={value} onChange={onChange} />
+      )}
+    </>
+  );
+}
+
+// Quality preset + Metal toggle for an on-device config; shared with the
+// Transcription tab's model picker.
+export function LocalTuningRows({
+  value,
+  onChange,
+}: {
+  value: Extract<ProviderConfig, { provider: "local" }>;
+  onChange: (next: ProviderConfig) => void;
+}) {
+  return (
         <>
           <Row
             label="Quality"
@@ -187,7 +203,5 @@ export function ProviderConfigForm({
             }
           />
         </>
-      )}
-    </>
   );
 }

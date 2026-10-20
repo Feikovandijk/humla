@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
 import { DiarizeModelManager } from "../components/DiarizeModelManager";
 import { Disclosure } from "../components/Disclosure";
-import { LocalModelManager } from "../components/LocalModelManager";
 import { PerLanguageOverrides } from "../components/PerLanguageOverrides";
-import { ProviderConfigForm } from "../components/ProviderConfigForm";
+import { LocalTuningRows } from "../components/ProviderConfigForm";
+import { TranscriptionModelPicker } from "../components/TranscriptionModelPicker";
 import { Row, Section } from "../components/Section";
 import { RenameYouRow } from "../components/RenameYouRow";
 import { Select } from "../../../components/ui/Select";
@@ -127,20 +127,20 @@ export function TranscriptionTab({
   return (
     <>
       <Section title="Transcription">
-        <ProviderConfigForm
+        <TranscriptionModelPicker
           value={def}
           onChange={setDefaultConfig}
-          localModels={local.models}
+          local={local}
+          onDownload={downloadModel}
+          onDelete={deleteModel}
+          setLanguageOverride={setLanguageOverride}
+          cloudFooter={(p) => <ProviderKeyCard provider={p as KeyProvider} />}
+          localFooter={
+            def.provider === "local" && (
+              <LocalTuningRows value={def} onChange={setDefaultConfig} />
+            )
+          }
         />
-        {def.provider === "local" && !local.models.some((m) => m.downloaded) && (
-          <p className="text-xs text-[var(--color-danger)] py-3">
-            No local model is downloaded. Download one under Advanced below
-            before recording.
-          </p>
-        )}
-        {def.provider !== "local" && (
-          <ProviderKeyCard provider={def.provider as KeyProvider} />
-        )}
         <Row
           label="Language"
           description="Default for new notes. Each note has its own language chip in the header that overrides this."
@@ -168,33 +168,6 @@ export function TranscriptionTab({
               setLanguageOverride={setLanguageOverride}
               removeLanguageOverride={removeLanguageOverride}
               local={local}
-            />
-          </div>
-          <div>
-            <div className="text-sm">Local models</div>
-            <LocalModelManager
-              state={local}
-              activeId={def.provider === "local" ? def.model_id : ""}
-              language={s.language}
-              onDownload={downloadModel}
-              onDelete={deleteModel}
-              setLanguageOverride={setLanguageOverride}
-              onSelect={(id) => {
-                // Selecting a local model from the manager pins it as the
-                // default's model_id. If currently on a non-local default,
-                // switch them to Local with this model — matches the v0.23
-                // implicit behaviour of the radio button.
-                if (def.provider === "local") {
-                  setDefaultConfig({ ...def, model_id: id });
-                } else {
-                  setDefaultConfig({
-                    provider: "local",
-                    model_id: id,
-                    preset: "quality",
-                    use_gpu: true,
-                  });
-                }
-              }}
             />
           </div>
           <div>
