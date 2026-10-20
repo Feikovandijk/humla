@@ -138,7 +138,7 @@ echo "  $TARBALL (payload reports $TARBALL_VERSION)"
 echo "  $SIG_FILE"
 
 PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-DOWNLOAD_URL="https://github.com/michaelwilhelmsen/humla/releases/download/$TAG/$(basename "$TARBALL")"
+DOWNLOAD_URL="https://github.com/Feikovandijk/humla/releases/download/$TAG/$(basename "$TARBALL")"
 
 # 5. Compose latest.json. Detect arch so the platform key is right —
 # darwin-aarch64 for Apple Silicon, darwin-x86_64 for Intel.
@@ -167,7 +167,7 @@ const {
 } = process.env;
 const manifest = {
   version: VERSION,
-  notes: `See https://github.com/michaelwilhelmsen/humla/releases/tag/${TAG}`,
+  notes: `See https://github.com/Feikovandijk/humla/releases/tag/${TAG}`,
   pub_date: PUB_DATE,
   platforms: {
     [PLATFORM]: {
@@ -214,6 +214,6 @@ Existing installs will offer to auto-update from the menu (Humla → Check for U
 
 echo
 echo "✅ Released $TAG"
-echo "   https://github.com/michaelwilhelmsen/humla/releases/tag/$TAG"
+echo "   https://github.com/Feikovandijk/humla/releases/tag/$TAG"
 echo
 echo "Existing installs will auto-detect the update on next launch (or via Check for Updates…)."

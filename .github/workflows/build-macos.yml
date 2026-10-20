@@ -1,0 +1,99 @@
+name: Build macOS app
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: build-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write # gh release create on tags
+
+env:
+  IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
+
+jobs:
+  build:
+    # Apple Silicon runner; speaker-diarize's Package.swift needs swift-tools 6.2 (Xcode 26).
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag matches app version
+        if: env.IS_RELEASE == 'true'
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          [[ "v$VERSION" == "$GITHUB_REF_NAME" ]] || { echo "tag $GITHUB_REF_NAME != package.json v$VERSION" >&2; exit 1; }
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check changelog entry
+        if: env.IS_RELEASE == 'true'
+        run: node scripts/check-release-notes.mjs "${GITHUB_REF_NAME#v}"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # build-dmg.sh skips the diarize sidecar (it expects a prebuilt one), so CI builds it here.
+      # With no Developer ID in the runner's keychain, every script falls back to ad-hoc signing.
+      - name: Build sidecars, Metal library and MCP server
+        run: |
+          ./scripts/build-sidecar.sh
+          ./scripts/build-diarize.sh
+          ./scripts/build-metallib.sh
+          ./scripts/build-mcp.sh
+
+      # shortcut: ad-hoc signed, no notarisation; add the Developer ID + notarytool secrets
+      # and drop the signingIdentity override to ship notarised builds.
+      # Updater artifacts only on tags, so branch builds need no signing secret.
+      - name: Build app bundle
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ env.IS_RELEASE == 'true' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ env.IS_RELEASE == 'true' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+        run: |
+          rm -rf src-tauri/target/release/bundle  # never ship a cached previous payload
+          pnpm tauri build --config "{\"bundle\":{\"createUpdaterArtifacts\":$IS_RELEASE,\"macOS\":{\"signingIdentity\":\"-\"}}}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Humla-${{ github.sha }}
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: env.IS_RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BUNDLE=src-tauri/target/release/bundle
+          TARBALL=$BUNDLE/macos/Humla.app.tar.gz
+          node -e '
+            const fs = require("fs");
+            const [tag, sig, out] = process.argv.slice(1);
+            fs.writeFileSync(out, JSON.stringify({
+              version: tag.slice(1),
+              notes: `See https://github.com/${process.env.GITHUB_REPOSITORY}/releases/tag/${tag}`,
+              pub_date: new Date().toISOString(),
+              platforms: { "darwin-aarch64": {
+                signature: fs.readFileSync(sig, "utf8").trim(),
+                url: `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${tag}/Humla.app.tar.gz`,
+              } },
+            }, null, 2));
+          ' "$GITHUB_REF_NAME" "$TARBALL.sig" "$BUNDLE/latest.json"
+          cat "$BUNDLE/latest.json"
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" \
+            --notes "Apple Silicon: download the DMG, drag to Applications, right-click → Open on first launch. Existing installs update themselves." \
+            $BUNDLE/dmg/*.dmg "$TARBALL" "$TARBALL.sig" "$BUNDLE/latest.json"
