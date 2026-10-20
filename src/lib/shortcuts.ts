@@ -3,20 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { ipc, onToggleRecord } from "./ipc";
 import { resolveHotkeyAction } from "./hotkey";
 import { useNotesStore, useRecordingStore } from "./store";
-import { useCloudStore } from "./cloud";
 import { useZoomStore } from "./zoom";
-
-// Is the note on this route one this user may record into? The Record button is
-// hidden for viewers on a shared note, so every keyboard path has to be gated
-// the same way.
-function routeNoteIsReadOnly(noteId: string): boolean {
-  const note = useNotesStore.getState().notes.find((n) => n.id === noteId);
-  if (!note?.workspace_id) return false;
-  const role = useCloudStore
-    .getState()
-    .status.workspaces.find((w) => w.id === note.workspace_id)?.role;
-  return role === "viewer";
-}
 
 function routeNoteId(pathname: string): string | null {
   return pathname.match(/^\/note\/([^/]+)$/)?.[1] ?? null;
@@ -50,7 +37,7 @@ export function useGlobalShortcuts() {
           await ipc.recordingResume();
         } else if (status.phase === "idle" && status.noteId === null) {
           const id = routeNoteId(window.location.pathname);
-          if (id && !routeNoteIsReadOnly(id)) await ipc.recordingStart(id);
+          if (id) await ipc.recordingStart(id);
         }
       } else if (e.key === "k") {
         e.preventDefault();
@@ -84,7 +71,6 @@ export function useGlobalShortcuts() {
         phase: status.phase,
         activeNoteId: status.noteId,
         routeNoteId: routeId,
-        routeReadOnly: routeId ? routeNoteIsReadOnly(routeId) : false,
       });
       try {
         if (action.kind === "stop") {

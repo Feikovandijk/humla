@@ -92,7 +92,7 @@ describe("formatAccel", () => {
 });
 
 describe("resolveHotkeyAction", () => {
-  const idle = { phase: "idle" as const, activeNoteId: null, routeNoteId: null, routeReadOnly: false };
+  const idle = { phase: "idle" as const, activeNoteId: null, routeNoteId: null };
 
   it("starts on the open note when one is open", () => {
     expect(resolveHotkeyAction({ ...idle, routeNoteId: "n1" })).toEqual({
@@ -131,14 +131,6 @@ describe("resolveHotkeyAction", () => {
     expect(resolveHotkeyAction({ ...idle, activeNoteId: "n1" })).toEqual({ kind: "ignore" });
   });
 
-  // The record button is hidden for viewers on a shared note, so the
-  // keyboard path has to be gated the same way — but a new personal note is
-  // always fair game.
-  it("starts a fresh note instead of a read-only one", () => {
-    expect(
-      resolveHotkeyAction({ ...idle, routeNoteId: "n1", routeReadOnly: true }),
-    ).toEqual({ kind: "startNew" });
-  });
 });
 
 describe("isModifierOnly", () => {

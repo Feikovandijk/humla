@@ -23,9 +23,6 @@ function makeNote(id: string, title: string): Note {
     detected_language: null,
     created_at: Date.now(),
     updated_at: Date.now(),
-    owner: "",
-    workspace_id: "",
-    private: false,
   };
 }
 

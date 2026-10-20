@@ -22,7 +22,6 @@ mod embed;
 // Public so the `humla-mcp` binary (#172) can drive it. Everything below it —
 // `db`, `html_text` — stays private to the crate.
 pub mod mcp;
-pub mod sync;
 
 use std::sync::Arc;
 use parking_lot::Mutex;
@@ -44,10 +43,6 @@ pub struct AppState {
     // `keychain::read` and updated by `keychain::write`, so a Settings write
     // takes effect immediately.
     pub keychain_cache: keychain::Cache,
-    /// Notified after each successful local write. `NoopSync` in the
-    /// open-source build; a commercial build installs an observer that
-    /// enqueues the change for upload.
-    pub sync: Arc<dyn sync::SyncObserver>,
     /// Serializes every read-modify-write of any note's `sessions.json`.
     /// The post-stop chain (`migrate_flat_if_needed` + `append_session`) and
     /// the cloud pull worker (`reconcile_manifest` + `write_manifest`) both
@@ -90,26 +85,6 @@ pub struct AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // With the `cloud` feature (default), install the live cloud-sync observer:
-    // it starts the worker once configured + signed in and restarts it on
-    // login / workspace switch. Without the feature, sync is a no-op and the
-    // app never touches the network for sync.
-    #[cfg(feature = "cloud")]
-    run_with_sync(commands::cloud_worker::install);
-
-    #[cfg(not(feature = "cloud"))]
-    run_with_sync(|_ctx| Arc::new(sync::NoopSync));
-}
-
-/// Entry point that lets a caller inject a sync implementation. `make_sync`
-/// receives a [`sync::SyncContext`] (database handle + `AppHandle`) the moment
-/// those exist during setup, and returns the observer to install on
-/// [`AppState`]. The open-source [`run`] passes a factory that yields
-/// [`sync::NoopSync`].
-pub fn run_with_sync<F>(make_sync: F)
-where
-    F: FnOnce(sync::SyncContext) -> Arc<dyn sync::SyncObserver> + Send + 'static,
-{
     tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -196,22 +171,13 @@ where
             let existing_install = db_path.exists();
             let conn = db::open(&db_path).expect("open db");
             let db = Arc::new(Mutex::new(conn));
-            // Build the sync observer now that the db handle and AppHandle
-            // exist. In the open-source build this is `NoopSync` and the
-            // factory ignores the context.
             let keychain_cache = keychain::new_cache();
-            let sync = make_sync(sync::SyncContext {
-                db: db.clone(),
-                app: app.handle().clone(),
-                keychain_cache: keychain_cache.clone(),
-            });
             app.manage(AppState {
                 db,
                 recording: Arc::new(Mutex::new(recording::LiveCapture::default())),
                 whisper: local_whisper::new_shared(),
                 transcribe_gate: Arc::new(tokio::sync::Mutex::new(())),
                 keychain_cache,
-                sync,
                 manifest_lock: Arc::new(tokio::sync::Mutex::new(())),
                 unify_locks: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 chat_cancels: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -353,8 +319,6 @@ where
             commands::notes_update,
             commands::notes_delete,
             commands::notes_move,
-            commands::notes_set_workspace,
-            commands::notes_set_private,
             commands::notes_list_trash,
             commands::notes_restore,
             commands::notes_purge,
@@ -375,42 +339,6 @@ where
             commands::webhook_set_endpoint,
             commands::webhook_destination,
             commands::webhook_send_note,
-            commands::cloud_status,
-            commands::cloud_configure,
-            commands::cloud_login,
-            commands::cloud_verify_two_factor,
-            commands::cloud_two_factor_setup,
-            commands::cloud_two_factor_enable,
-            commands::cloud_two_factor_recovery_codes,
-            commands::cloud_two_factor_disable,
-            commands::cloud_two_factor_members,
-            commands::cloud_set_workspace_require_2fa,
-            commands::cloud_save_recovery_codes,
-            commands::cloud_signup,
-            commands::cloud_resend_verification,
-            commands::cloud_request_password_reset,
-            commands::cloud_logout,
-            commands::cloud_create_workspace,
-            commands::cloud_select_workspace,
-            commands::cloud_rename_workspace,
-            commands::cloud_delete_workspace,
-            commands::cloud_leave_workspace,
-            commands::cloud_transfer_workspace,
-            commands::cloud_workspace_members,
-            commands::cloud_speaker_roster,
-            commands::cloud_pending_note_ids,
-            commands::cloud_upload_note_audio,
-            commands::cloud_download_note_audio,
-            commands::cloud_upload_note_sessions,
-            commands::cloud_repair_note_sessions,
-            commands::cloud_download_note_sessions,
-            commands::cloud_note_recording_status,
-            commands::cloud_add_member,
-            commands::cloud_invite_member,
-            commands::cloud_remove_member,
-            commands::cloud_set_member_role,
-            commands::cloud_billing_checkout,
-            commands::cloud_billing_portal,
             commands::app_data_dir,
             commands::system_arch,
             commands::mcp_server_path,
@@ -478,17 +406,9 @@ where
             commands::chat_delete_conversation,
             commands::chat_rename_conversation,
             commands::chat_set_breadth,
-            commands::chat_set_owner_filter,
             commands::chat_get_breadth,
-            commands::chat_get_owner_filter,
             commands::chat_set_pin,
             commands::chat_get_pin,
-            commands::chat_usage,
-            commands::chat_index_state,
-            commands::chat_key_meta,
-            commands::chat_key_set,
-            commands::chat_key_set_from_keychain,
-            commands::chat_key_delete,
             commands::chat_reindex_note,
             commands::chat_rebuild_index,
             commands::chat_stale_note_count,

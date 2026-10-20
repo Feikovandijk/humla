@@ -304,7 +304,6 @@ describe("SpeakerLabels rename picker", () => {
             { label: "Speaker 2", note_count: 9, last_used_at: 1_767_000_000 },
             { label: "You", note_count: 9, last_used_at: 1_767_000_000 },
           ],
-          roster: [],
         }}
       />,
     );
@@ -460,16 +459,6 @@ describe("SpeakerLabels cross-note rename", () => {
     render(<SpeakerLabels transcript={NAMED} onRename={onRename} />);
     await renameTo(user, "Hege Tronshaugen");
     expect(onRename).toHaveBeenCalledWith("Hege", "Hege Tronshaugen");
-  });
-});
-
-describe("SpeakerLabels read-only", () => {
-  it("renders static pills with no rename or merge affordance", () => {
-    render(<SpeakerLabels transcript={TWO_SPEAKERS} onRename={vi.fn()} readOnly />);
-    // No interactive buttons at all in read-only mode.
-    expect(screen.queryByRole("button")).toBeNull();
-    expect(screen.getByText("Speaker 1")).toBeTruthy();
-    expect(screen.getByText("Speaker 2")).toBeTruthy();
   });
 });
 

@@ -19,7 +19,6 @@ import { Onboarding } from "./pages/onboarding";
 import { ipc } from "./lib/ipc";
 import { useGlobalShortcuts } from "./lib/shortcuts";
 import { bindBackendListeners, useNotesStore } from "./lib/store";
-import { useCloudStore } from "./lib/cloud";
 import { useThemeBoot } from "./lib/theme";
 import { usePaletteBoot } from "./lib/palette";
 import { useZoomBoot } from "./lib/zoom";
@@ -30,7 +29,6 @@ export default function App() {
   usePaletteBoot();
   useZoomBoot();
   const refresh = useNotesStore((s) => s.refresh);
-  const refreshCloud = useCloudStore((s) => s.refresh);
 
   // Takeover guard. `null` = still reading the flag (render nothing — no flash
   // of either the app or the wizard); `false` = show the first-run wizard
@@ -65,8 +63,7 @@ export default function App() {
     // Layout's own call stays a harmless no-op.
     bindBackendListeners();
     refresh();
-    refreshCloud();
-  }, [refresh, refreshCloud]);
+  }, [refresh]);
 
   // Still resolving the flag — render nothing to avoid a flash of the wrong UI.
   if (onboardingDone === null) {

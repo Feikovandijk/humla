@@ -12,8 +12,7 @@ pub fn summary_prompts_list(
     state: State<AppState>,
 ) -> Result<Vec<db::SummaryPrompt>, String> {
     let conn = state.db.lock();
-    let workspace = super::cloud::active_workspace(&conn);
-    db::list_summary_prompts(&conn, &workspace).map_err(err)
+    db::list_summary_prompts(&conn, "").map_err(err)
 }
 
 #[tauri::command]
@@ -28,10 +27,8 @@ pub fn summary_prompts_create(
     }
     let prompt = {
         let conn = state.db.lock();
-        let workspace = super::cloud::active_workspace(&conn);
-        db::create_summary_prompt(&conn, trimmed_name, &content, &workspace).map_err(err)?
+        db::create_summary_prompt(&conn, trimmed_name, &content, "").map_err(err)?
     };
-    state.sync.summary_prompt_upserted(&prompt.id);
     Ok(prompt)
 }
 
@@ -50,7 +47,6 @@ pub fn summary_prompts_update(
         let conn = state.db.lock();
         db::update_summary_prompt(&conn, &id, trimmed_name, &content).map_err(err)?
     };
-    state.sync.summary_prompt_upserted(&prompt.id);
     Ok(prompt)
 }
 
@@ -60,6 +56,5 @@ pub fn summary_prompts_delete(state: State<AppState>, id: String) -> Result<(), 
         let conn = state.db.lock();
         db::delete_summary_prompt(&conn, &id).map_err(err)?;
     }
-    state.sync.summary_prompt_deleted(&id);
     Ok(())
 }

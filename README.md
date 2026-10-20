@@ -224,6 +224,26 @@ open src-tauri/target/debug/bundle/macos/Humla.app
 
 For the full release pipeline (signed + notarised DMG + auto-updater payload + GitHub release), see `scripts/release.sh` and the credentials it reads from `.env.notarise`. Requires an Apple Developer ID, notary key, and a Tauri updater Ed25519 keypair.
 
+### Build on GitHub Actions
+
+The **Build macOS app** workflow (`.github/workflows/build-macos.yml`) builds the app on an Apple Silicon runner, so you don't need a local toolchain to get a DMG.
+
+It runs on:
+- **every push to `main`**, which produces a DMG you can download from the run's **Artifacts** (`Humla-<commit sha>`);
+- **a `v*` tag**, which also publishes a GitHub release;
+- **manually**, from Actions → Build macOS app → Run workflow.
+
+Each run builds all four bundled pieces (the `audio-capture` and `speaker-diarize` sidecars, the Metal library and `humla-mcp`), then `pnpm tauri build`. Builds are **ad-hoc signed and not notarised**, so on first launch right-click Humla → Open.
+
+To publish a release:
+
+1. Bump the version in `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`, and add its entry to `src/content/releases.ts`.
+2. Push a tag matching it, e.g. `git tag v0.70.1 && git push origin v0.70.1`.
+
+The tag build fails if the tag doesn't match `package.json` or the changelog entry is missing. Otherwise it signs the updater payload and creates the release with the DMG, `Humla.app.tar.gz`, its `.sig` and `latest.json`. Existing installs pick it up through the auto-updater.
+
+Signing the updater payload needs two repository secrets, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, matching the public key in `src-tauri/tauri.conf.json`. Branch builds don't use them.
+
 ## Project layout
 
 ```

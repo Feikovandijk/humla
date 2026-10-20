@@ -2,10 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Row } from "./Section";
 import { ipc, type Note } from "../../../lib/ipc";
 import { useNotesStore } from "../../../lib/store";
-import { useCloudStore } from "../../../lib/cloud";
 import { s as plural } from "./format";
 import {
-  notesIRecorded,
   notesWithSpeaker,
   renameOutcomeMessage,
   renameSpeakerAcrossNotes,
@@ -28,16 +26,13 @@ import {
 // It lives in Transcription rather than Chat because the row is about what
 // transcripts *say*, which is where someone whose transcript reads "You:" looks.
 //
-// An automatic migration was rejected and stays rejected. Migrations run at
-// `open()`, before sign-in, so a workspace note's owner name isn't resolvable
-// then; it would mass-rewrite synced user content in one go; and it's
-// irreversible, where Personal falls back to the macOS name and could stamp
-// `admin` across every transcript. Running after sign-in, showing the exact
-// string first, and going through primitives that ping the sync observer are the
-// mitigations for all three.
+// An automatic migration was rejected and stays rejected: it would mass-rewrite
+// user content in one go, and it's irreversible, where the fallback is the macOS
+// name and could stamp `admin` across every transcript. Showing the exact string
+// first is the mitigation.
 //
-// This does NOT remove the compatibility path: `You:` keeps arriving from older
-// clients and from every new remote recording, so `chat/tools.rs` still resolves
+// This does NOT remove the compatibility path: `You:` keeps arriving from every
+// new remote recording, so `chat/tools.rs` still resolves
 // it at query time. The row is about readability and convergence, not retrieval.
 
 const YOU_LABEL = "You";
@@ -45,12 +40,6 @@ const YOU_LABEL = "You";
 export function RenameYouRow() {
   const notes = useNotesStore((s) => s.notes);
   const replaceTranscript = useNotesStore((s) => s.replaceTranscript);
-  const cloudName = useCloudStore((s) => s.status.user?.name ?? null);
-  // A viewer can't write notes at all, so offering the sweep would rewrite every
-  // pill optimistically and then fail every write (#116: "viewer gets none of
-  // this").
-  const isViewer = useCloudStore((s) => s.status.current_workspace?.role === "viewer");
-  const myUserId = useCloudStore((s) => s.status.user?.id);
   const [name, setName] = useState<string | null>(null);
   const [state, setState] = useState<
     | { kind: "idle" }
@@ -62,29 +51,20 @@ export function RenameYouRow() {
 
   // Counted from transcript text, so the number on the button cannot be a lie —
   // `notes.speakers` is only written by `reindex_note` and can be stale.
-  //
-  // **Scoped to notes I recorded**, which is the whole basis for touching `You`
-  // at all: it means "whoever held the mic", so it only resolves to me inside my
-  // own recordings. In a teammate's recording `You` is *them*, and rewriting it
-  // to my name writes false attribution into their meeting.
-  const affected = useMemo(
-    () => notesWithSpeaker(notesIRecorded(notes, myUserId), YOU_LABEL),
-    [notes, myUserId],
-  );
+  const affected = useMemo(() => notesWithSpeaker(notes, YOU_LABEL), [notes]);
 
-  // `user_display_name` → workspace account name → macOS full name. Resolved in
-  // Rust so the chain lives in one place; the cloud half is passed in because
-  // the store already holds it and a text field must not wait on the network.
+  // `user_display_name` → macOS full name. Resolved in Rust so the chain lives
+  // in one place.
   useEffect(() => {
     let live = true;
     ipc
-      .speakerDefaultName(cloudName)
+      .speakerDefaultName()
       .then((n) => live && setName(n ?? ""))
       .catch(() => live && setName(""));
     return () => {
       live = false;
     };
-  }, [cloudName]);
+  }, []);
 
   // Nothing to repair → no row at all. Also hidden until the prefill resolves,
   // so the field never flickers from empty to a name.
@@ -93,7 +73,7 @@ export function RenameYouRow() {
   // optimistic store update empties `affected` the moment the sweep starts, so
   // retiring on the count alone would unmount the row mid-run and the user would
   // never learn whether it worked. It retires on the next visit instead.
-  if (isViewer || name === null) return null;
+  if (name === null) return null;
   if (affected.length === 0 && state.kind === "idle") return null;
 
   const target = name.trim();

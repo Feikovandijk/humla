@@ -19,22 +19,19 @@
 // would be the same word twice, and once a conversation is open its own title is
 // the honest thing to show.
 //
-// Deliberately absent: a greeting. We have no local user name — one exists only
-// via `CloudUser.name` when signed into cloud, so it would be blank for the
-// local-only majority. The prompt cards on a new chat do the job a greeting
+// Deliberately absent: a greeting. We have no local user name. The prompt cards on a new chat do the job a greeting
 // pretends to. Also absent: a scope picker (its only option would be "All notes";
 // narrowing stays a tool argument the model chooses, per #81).
 
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useParams } from "react-router-dom";
-import { Folder as FolderIcon, Lock, MoreHorizontal, Sparkles, Users, type LucideIcon } from "lucide-react";
+import { Folder as FolderIcon, Lock, MoreHorizontal, Sparkles, type LucideIcon } from "lucide-react";
 import { ChatPanel } from "../components/ChatPanel";
 import { ChatHistoryControls } from "../components/ChatHistoryControls";
 import { ContextMenu, ContextMenuItem } from "../components/ContextMenu";
 import { Modal } from "./settings/components/Modal";
 import type { LayoutOutletContext } from "../components/Layout";
 import { useGlobalChatStore } from "../lib/globalChat";
-import { useCloudStore } from "../lib/cloud";
 import { useNotesStore } from "../lib/store";
 import type { ChatTarget } from "../lib/chatTarget";
 import { cn } from "../lib/cn";
@@ -100,7 +97,6 @@ export function Chat({
   const { sidebarCollapsed } = useOutletContext<LayoutOutletContext>();
   const controls = useGlobalChatStore((s) => s.controls);
   const setControls = useGlobalChatStore((s) => s.setControls);
-  const workspaceName = useCloudStore((s) => s.status.current_workspace?.name ?? null);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -156,22 +152,9 @@ export function Chat({
           {barTitle}
         </span>
 
-        {/* Tenant, with the same initial badge the note's meta row uses. */}
-        <span className="nd-meta shrink-0">
-          <span
-            className="grid place-items-center w-[17px] h-[17px] rounded-[5px] text-[9px] font-semibold"
-            style={{ background: "var(--color-surface-raised)", color: "var(--color-text)" }}
-          >
-            {(workspaceName ?? "Personal").charAt(0).toUpperCase()}
-          </span>
-          {workspaceName ?? "Personal"}
-        </span>
-
         {/* Who can read this — the highest-stakes fact on the screen, so it gets
             the pill treatment rather than being tucked into a sentence. */}
-        <StatusPill icon={workspaceName ? Users : Lock}>
-          {workspaceName ? "All members" : "Private"}
-        </StatusPill>
+        <StatusPill icon={Lock}>Private</StatusPill>
 
         {/* What this chat can reach (#110). Only shown when the reach is narrower
             than the library — on `/chat` there is nothing to say, since "all your
@@ -182,9 +165,7 @@ export function Chat({
 
         {/* What's about to answer. Published by the pane rather than re-derived —
             `useChatReadiness` polls a local Ollama server every 2s and a second
-            caller would double that to render one label. Null in a workspace on
-            purpose: the turn runs on the server's model, so naming the local
-            setting would name something that isn't answering (#80). */}
+            caller would double that to render one label. */}
         {controls?.status && (
           <span
             className="nd-meta shrink-0"

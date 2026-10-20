@@ -40,7 +40,6 @@ export const DEFAULTS: Record<EditableKey, string> = {
   transcribe_manually: "false",
   keep_awake: "true",
   close_to_tray: "false",
-  sync_audio: "true",
   custom_vocabulary: "",
   summary_model: "gpt-5.4-mini",
   anthropic_model: "claude-sonnet-5",

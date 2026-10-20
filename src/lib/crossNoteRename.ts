@@ -48,24 +48,11 @@ export function notesWithSpeaker(notes: Note[], label: string): Note[] {
  * at all: Hege is the same Hege in everyone's notes, which is why converging her
  * four spellings across the library is a repair rather than a corruption.
  *
- * The one legitimate exception is the `You` action in Settings, which is scoped
- * to [`notesIRecorded`] — inside my own recordings, `You` really is me.
+ * The one legitimate exception is the `You` action in Settings: every note in
+ * this library is the user's own recording, so there `You` really is them.
  */
 export function isPerRecordingLabel(label: string): boolean {
   return isPlaceholderLabel(label);
-}
-
-/**
- * The notes this user recorded, which is the only scope in which a per-recording
- * label like `You` resolves to them.
- *
- * An empty `owner` counts as mine: that's a local-only or pre-sync note, and
- * every Personal note. With no signed-in user, owned notes are excluded rather
- * than assumed — a store left over from a previous session must not widen a
- * sweep.
- */
-export function notesIRecorded(notes: Note[], myUserId: string | undefined): Note[] {
-  return notes.filter((n) => !n.owner || n.owner === myUserId);
 }
 
 export type CrossNoteRenameOutcome = {
@@ -95,7 +82,6 @@ export async function renameSpeakerAcrossNotes({
   newLabel,
   updateNote = ipc.updateNote,
   noteTimelineRename = ipc.noteTimelineRename,
-  uploadNoteSessions = ipc.uploadNoteSessions,
   reindexNote = ipc.chatReindexNote,
   onRewritten,
 }: {
@@ -103,11 +89,10 @@ export async function renameSpeakerAcrossNotes({
   notes: Note[];
   oldLabel: string;
   newLabel: string;
-  // The four writes, defaulted to the real IPC calls. Overridable so the loop
+  // The three writes, defaulted to the real IPC calls. Overridable so the loop
   // can be tested without a backend; no caller needs to pass them.
   updateNote?: (id: string, patch: { transcript: string }) => Promise<void>;
   noteTimelineRename?: (id: string, oldLabel: string, newLabel: string) => Promise<void>;
-  uploadNoteSessions?: (id: string) => Promise<void>;
   reindexNote?: (id: string) => Promise<void>;
   /** Optimistic local update, with the already-rewritten transcript. */
   onRewritten: (id: string, transcript: string) => void;
@@ -127,8 +112,6 @@ export async function renameSpeakerAcrossNotes({
   const failed: string[] = [];
   for (const { id, transcript } of affected) {
     try {
-      // `notes_update` is what pings `sync.note_upserted`, so the rewrite
-      // propagates instead of going dirty on this device only.
       await updateNote(id, { transcript });
       renamed.push(id);
     } catch {
@@ -140,13 +123,11 @@ export async function renameSpeakerAcrossNotes({
     // the rename, and the note stays counted as renamed.
     //
     // One try EACH, deliberately: sharing a try meant a failed timeline rename
-    // also skipped the re-upload and the reindex, so a note could silently drop
+    // also skipped the reindex, so a note could silently drop
     // out of chat retrieval freshness while the toast said it was renamed.
     // Logged rather than silent, because "renamed" then means slightly less than
     // it says.
     await settle(`timeline rename for ${id}`, () => noteTimelineRename(id, oldLabel, newLabel));
-    // Re-upload rewritten timelines for shared notes (#16); a no-op in Personal.
-    await settle(`session upload for ${id}`, () => uploadNoteSessions(id));
     await settle(`reindex for ${id}`, () => reindexNote(id));
   }
   return { renamed, failed };

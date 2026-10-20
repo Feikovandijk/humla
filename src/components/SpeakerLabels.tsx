@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Merge, User } from "lucide-react";
+import { Merge } from "lucide-react";
 import { extractSpeakerLabels } from "../lib/speakers";
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuTrigger } from "./ui/Menu";
 import { Combobox, type ComboboxOption } from "./ui/Combobox";
@@ -40,7 +40,6 @@ export function SpeakerLabels({
   onRename,
   onRenameEverywhere,
   otherNotesWithLabel,
-  readOnly,
   suggestions,
 }: {
   transcript: string;
@@ -54,7 +53,6 @@ export function SpeakerLabels({
   onRenameEverywhere?: (oldLabel: string, newLabel: string) => void;
   /** Per label: how many OTHER notes carry it. Absent → no sweep is offered. */
   otherNotesWithLabel?: Record<string, number>;
-  readOnly?: boolean;
   /** Omitted → the rename input is plain free text, exactly as before. */
   suggestions?: SpeakerSuggestionSource;
 }) {
@@ -79,7 +77,6 @@ export function SpeakerLabels({
           }
           otherNoteCount={otherNotesWithLabel?.[label] ?? 0}
           onMerge={(target) => onRename(label, target)}
-          readOnly={readOnly}
           suggestions={suggestions}
           inNoteLabels={labels}
         />
@@ -97,7 +94,6 @@ function SpeakerChip({
   onRenameEverywhere,
   otherNoteCount,
   onMerge,
-  readOnly,
   suggestions,
   inNoteLabels,
 }: {
@@ -110,7 +106,6 @@ function SpeakerChip({
   /** How many OTHER notes carry this label. 0 → nothing to choose between. */
   otherNoteCount: number;
   onMerge: (target: string) => void;
-  readOnly?: boolean;
   suggestions?: SpeakerSuggestionSource;
   inNoteLabels: string[];
 }) {
@@ -134,7 +129,6 @@ function SpeakerChip({
         ? suggestSpeakerLabels({
             query: draft,
             stats: suggestions.stats,
-            roster: suggestions.roster,
             inNoteLabels,
             renaming: label,
           })
@@ -150,11 +144,6 @@ function SpeakerChip({
     // "@" is visibly a new label. That is the whole cue.
     content: (
       <>
-        {s.kind === "member" && (
-          // A member you've never labelled, marked so it doesn't read as a name
-          // you already chose.
-          <User size={12} strokeWidth={1.75} aria-hidden className="opacity-60" />
-        )}
         <span>@{s.label}</span>
         {s.inNote && (
           // Picking this has a different consequence: it folds two pills into
@@ -195,16 +184,6 @@ function SpeakerChip({
   function cancelScope() {
     setPendingName(null);
     setDraft(label);
-  }
-
-  // Read-only (viewer): a static, non-interactive pill — no click-to-rename,
-  // no merge.
-  if (readOnly) {
-    return (
-      <span className="nd-speaker-pill" style={{ background: color }}>
-        {label}
-      </span>
-    );
   }
 
   if (pendingName !== null) {

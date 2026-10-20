@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { RotateCcw, Trash2 } from "lucide-react";
 import { ipc, type Note } from "../lib/ipc";
 import { useNotesStore } from "../lib/store";
-import { useCloudStore } from "../lib/cloud";
 
 function formatDeleted(ts: number | null | undefined): string {
   if (!ts) return "";
@@ -15,13 +14,10 @@ function formatDeleted(ts: number | null | undefined): string {
   });
 }
 
-// Trash view: soft-deleted notes for the active workspace. Restore them (which
-// re-syncs, so they reappear for teammates too) or delete permanently. Fetched
+// Trash view: soft-deleted notes. Restore them or delete permanently. Fetched
 // directly via IPC rather than from the notes store, which only holds live notes.
 export function Trash() {
   const refreshNotes = useNotesStore((s) => s.refresh);
-  // Refetch when the active workspace changes (trash is workspace-scoped).
-  const wsId = useCloudStore((s) => s.status.current_workspace?.id ?? "");
   const [trashed, setTrashed] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -39,7 +35,7 @@ export function Trash() {
 
   useEffect(() => {
     load();
-  }, [load, wsId]);
+  }, [load]);
 
   async function restore(id: string) {
     setBusy(id);

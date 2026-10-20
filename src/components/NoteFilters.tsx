@@ -1,7 +1,5 @@
-import { Building2, CircleDot, FolderOpen, User, X } from "lucide-react";
-import { useShallow } from "zustand/react/shallow";
+import { Building2, CircleDot, FolderOpen, X } from "lucide-react";
 import { type Client } from "../lib/ipc";
-import { useCloudStore } from "../lib/cloud";
 import {
   NOTE_FILTER_LABEL,
   NO_FILTER,
@@ -14,7 +12,7 @@ import { cn } from "../lib/cn";
 import { SelectablePopover, type PopoverItem } from "./SelectablePopover";
 
 // The filter bar above the note grid: how far a note has got, whose client it
-// is, who recorded it, and whether it is filed anywhere.
+// is, and whether it is filed anywhere.
 
 const STATES: NoteState[] = ["empty", "notes", "recorded", "transcribed", "summarized"];
 
@@ -31,12 +29,6 @@ export function NoteFilters({
    *  and a folder view, whose every note is filed here. */
   showUnfiled: boolean;
 }) {
-  // `useShallow` because `Object.values` builds a fresh array each call.
-  const members = useCloudStore(useShallow((s) => Object.values(s.members)));
-  const myId = useCloudStore((s) => s.status.user?.id ?? null);
-  // A Personal library has one author, so the picker would offer a single name
-  // that changes nothing.
-  const showOwner = members.length > 1;
   const unfiled = value.folder === UNASSIGNED;
 
   return (
@@ -60,21 +52,6 @@ export function NoteFilters({
           ]}
           active={value.client}
           onSelect={(client) => onChange({ ...value, client })}
-        />
-      )}
-      {showOwner && (
-        <FilterPicker
-          ariaLabel="Created by"
-          icon={<User size={14} strokeWidth={1.6} />}
-          allLabel="Anyone"
-          // `owner` is who RECORDED a note, not who attended it — the same
-          // wording the chat pin carries, so the two read as one idea.
-          items={members.map((m) => ({
-            id: m.id,
-            label: m.id === myId ? "Me" : m.name || m.email,
-          }))}
-          active={value.owner}
-          onSelect={(owner) => onChange({ ...value, owner })}
         />
       )}
       {/* A toggle, not a picker: the sidebar already navigates to a folder, so

@@ -41,15 +41,12 @@ import { TranscriptionTab } from "./pages/settings/tabs/Transcription";
 import { DiarizeModelManager } from "./pages/settings/components/DiarizeModelManager";
 import { useNemotronOffer, type NemotronOfferState } from "./lib/nemotronOffer";
 import { useSettings } from "./pages/settings/useSettings";
-import { NewWorkspaceModal } from "./components/NewWorkspaceModal";
-import { DISCONNECTED, useCloudStore, type CloudStatus, type CloudWorkspace } from "./lib/cloud";
 import { DEFAULTS, EMPTY_DIARIZE_STATE, type EditableKey } from "./pages/settings/types";
 import { SummaryStep } from "./pages/onboarding/steps/Summary";
 import { TranscriptionStep } from "./pages/onboarding/steps/Transcription";
 import { STEP_ORDER, type StepContext, type StepId } from "./pages/onboarding/types";
 import type { DiarizeEngine, ProviderConfig, RecordingStatus, Step, TimelineEntry } from "./lib/ipc";
 import { DEMO_CLIENTS, DEMO_FOLDERS, demoNotes } from "./test/noteLibrary";
-import { DEMO_RECOVERY_CODES, DEMO_TWO_FACTOR_SETUP } from "./test/twoFactorFixtures";
 // Mirrors src/main.tsx — every theme's typeface, so a scenario reviewed under
 // `?palette=<id>` renders in that design's face rather than falling back.
 import "@fontsource/hanken-grotesk/400.css";
@@ -194,7 +191,6 @@ function playerCase(disabled: boolean, width = 420, longNames = false): Scenario
     ipc: {
       note_session_playback_path: () => null,
       note_timeline_set_chunk_text: () => null,
-      cloud_upload_note_sessions: () => null,
     },
   };
 }
@@ -374,7 +370,6 @@ function toolbarCase(
         noteId="mock-note"
         backTo="/"
         backLabel="Kundemøter og oppfølging"
-        readOnly={false}
         recActive={false}
         recordBlock={null}
         panelOpen
@@ -463,7 +458,7 @@ function exportCase(): Scenario {
   return {
     wrap: (node) => <MemoryRouter>{node}</MemoryRouter>,
     render: () => (
-      <ExportModal note={note} open onClose={() => {}} onCreateTeam={() => {}} flushEdits={async () => {}} />
+      <ExportModal note={note} open onClose={() => {}} flushEdits={async () => {}} />
     ),
     ipc: { export_note: () => undefined },
   };
@@ -694,71 +689,6 @@ function nemotronOfferCase(offer?: NemotronOfferState): Scenario {
   };
 }
 
-// ---- workspace-creation axis: the sheet's five stages ----------------------
-// Five separate scenarios rather than one clickable flow: the stages are DERIVED
-// from cloud status, so seeding the status is how you reach one — and each is a
-// distinct layout to judge (a pitch panel, a form, a named field, a wait state,
-// a growing list). No `wrap`: the sheet portals to <body> and covers the
-// viewport, which is exactly what it does in the app.
-function workspaceCase(stage: "connect" | "auth" | "name" | "trial" | "invite"): Scenario {
-  const ws = (plan: CloudWorkspace["plan_status"]): CloudWorkspace => ({
-    id: "w1",
-    name: "Acme Inc",
-    role: "owner",
-    plan_status: plan,
-  });
-  const signedIn: CloudStatus = {
-    ...DISCONNECTED,
-    configured: true,
-    logged_in: true,
-    base_url: "https://sync.humla.team",
-    user: { id: "u1", email: "michael@example.no", name: "Michael", verified: true },
-    billing_enabled: true,
-    seat_price_cents: 500,
-    seat_currency: "usd",
-  };
-  const status: CloudStatus =
-    stage === "connect"
-      ? { ...DISCONNECTED, configured: false }
-      : stage === "auth"
-        ? { ...signedIn, logged_in: false, user: null }
-        : stage === "name"
-          ? signedIn
-          : {
-              ...signedIn,
-              current_workspace: ws(stage === "trial" ? "none" : "trialing"),
-              workspaces: [ws(stage === "trial" ? "none" : "trialing")],
-            };
-  return {
-    wrap: (node) => <div className="flex-1 min-h-0">{node}</div>,
-    render: () => <WorkspaceHarness status={status} pinned={stage === "trial" || stage === "invite"} />,
-    ipc: {
-      cloud_status: () => status,
-      cloud_create_workspace: () => ws("none"),
-      cloud_invite_member: () => "invited",
-      cloud_billing_checkout: () => "https://checkout.stripe.test/x",
-    },
-  };
-}
-
-function WorkspaceHarness({ status, pinned }: { status: CloudStatus; pinned: boolean }) {
-  // Seed before the first paint so the sheet never renders a stage it is about
-  // to leave — the store is the component's only input.
-  const [ready] = useState(() => {
-    useCloudStore.setState({ status, ready: true });
-    return true;
-  });
-  // `pinned` scenarios work an EXISTING workspace, which is how the read-only
-  // banner enters; the others create one, so they pass no id.
-  return ready ? (
-    <NewWorkspaceModal
-      open
-      onClose={() => console.log("[mock] close")}
-      workspaceId={pinned ? "w1" : null}
-    />
-  ) : null;
-}
-
 // ---- theme axis: every token-driven surface on one page --------------------
 // Real components where one exists (Toggle, Segmented, CommandSnippet's mono
 // block); the utility classes themselves where the component is a page (a nav
@@ -885,7 +815,7 @@ function titleCase(writing: boolean, title: string): Scenario {
     ),
     render: () => (
       <>
-        <NoteTitleBox title={title} onChange={() => {}} readOnly={false} writing={writing} />
+        <NoteTitleBox title={title} onChange={() => {}} writing={writing} />
         {/* The meta row is the thing that must not move. */}
         <div className="mb-8 pb-4 border-b border-[var(--color-line)]">
           <div className="flex flex-wrap items-center gap-1 -mx-2">
@@ -1095,13 +1025,6 @@ function capturingLibraryCase(
   };
 }
 
-const MOCK_WORKSPACE = {
-  id: "w1",
-  name: "Humla",
-  role: "owner" as const,
-  plan_status: "active" as const,
-};
-
 // ---- #115 axis: is anything pinned -----------------------------------------
 function chatPinsCase(pinned: boolean): Scenario {
   return {
@@ -1137,7 +1060,6 @@ function chatPinsCase(pinned: boolean): Scenario {
         { label: "Hege Tronshaugen", notes: 4, lastUsed: 0 },
         { label: "Michael", notes: 9, lastUsed: 0 },
       ],
-      cloud_speaker_roster: () => [],
     },
   };
 }
@@ -1309,12 +1231,6 @@ const CASES: Record<string, Scenario> = {
     takes: 3,
   }),
 
-  // --- The create-team-workspace sheet, one scenario per derived stage.
-  "ws-connect": workspaceCase("connect"),
-  "ws-auth": workspaceCase("auth"),
-  "ws-name": workspaceCase("name"),
-  "ws-trial": workspaceCase("trial"),
-  "ws-invite": workspaceCase("invite"),
 
   // --- #177: the controls row against the column it centres in. `recbar-420`
   // is `BODY_MIN`; `recbar-default` is the width the shipped default window
@@ -1505,10 +1421,9 @@ const CASES: Record<string, Scenario> = {
     },
   },
 
-  // The filter row at its widest: a workspace (so the owner axis appears), a
-  // client list, folders, and one note whose audio is still waiting to be
-  // transcribed. Every axis renders, which is the only way to see whether four
-  // pickers plus Clear still read as one row.
+  // The filter row at its widest: a client list, folders, and one note whose
+  // audio is still waiting to be transcribed. Every axis renders, which is the
+  // only way to see whether the pickers plus Clear still read as one row.
   "notes-filters": {
     route: "/all-notes",
     render: () => null, // unused — `route` renders the app
@@ -1517,19 +1432,6 @@ const CASES: Record<string, Scenario> = {
       folders_list: () => DEMO_FOLDERS,
       clients_list: () => DEMO_CLIENTS,
       notes_with_recordings: () => ["n1", "n2", "n3", "n4"],
-      // Through cloud_status rather than a store seed: the app refreshes the
-      // cloud store on boot, which would overwrite anything seeded ahead of it.
-      cloud_status: () => ({
-        ...DISCONNECTED,
-        logged_in: true,
-        user: { id: "u-me", email: "michael@humla.no", name: "Michael", verified: true },
-        current_workspace: MOCK_WORKSPACE,
-        workspaces: [MOCK_WORKSPACE],
-      }),
-      cloud_workspace_members: () => [
-        { id: "u-me", email: "michael@humla.no", name: "Michael", role: "owner" },
-        { id: "u-hege", email: "hege@humla.no", name: "Hege Nordvik", role: "member" },
-      ],
     },
   },
 
@@ -1649,38 +1551,6 @@ const CASES: Record<string, Scenario> = {
     },
   },
 
-  // --- Two-factor authentication. Settings → Account, signed in to a
-  // workspace you administer. `-off` also has a workspace waiting for it, so the
-  // switcher's locked row and the section's notice show; click "Turn on…" for
-  // the setup dialog. `-on` has a workspace requiring it, which holds "Turn off"
-  // back. `-sign-in` answers the password with the code step.
-  "two-factor-off": {
-    route: "/settings?tab=account",
-    render: () => null, // unused — `route` renders the app
-    ipc: twoFactorIpc(false),
-  },
-  "two-factor-on": {
-    route: "/settings?tab=account",
-    render: () => null, // unused — `route` renders the app
-    ipc: twoFactorIpc(true),
-  },
-  "two-factor-sign-in": {
-    route: "/settings?tab=account",
-    render: () => null, // unused — `route` renders the app
-    ipc: {
-      cloud_status: () => ({
-        ...DISCONNECTED,
-        configured: true,
-        base_url: "https://sync.humla.team",
-        signed_out_email: "m@example.no",
-      }),
-      cloud_login: () => ({ step: "two_factor" }),
-      cloud_verify_two_factor: () => {
-        throw { reason: "invalid_code", message: "That code isn't right." };
-      },
-    },
-  },
-
   // --- Themes: the token-driven chrome on one page, so a theme can be judged
   // as a design rather than as a diff. Combine with ?palette= and ?theme=.
   themes: {
@@ -1689,44 +1559,6 @@ const CASES: Record<string, Scenario> = {
     ipc: {},
   },
 };
-
-function twoFactorIpc(enabled: boolean) {
-  const acme: CloudWorkspace = {
-    id: "w1",
-    name: "Acme",
-    role: "admin",
-    plan_status: "active",
-    require_2fa: enabled,
-  };
-  const secure = { id: "w9", name: "Secure Co" };
-  return {
-    cloud_status: () => ({
-      ...DISCONNECTED,
-      configured: true,
-      logged_in: true,
-      base_url: "https://sync.humla.team",
-      user: { id: "u1", email: "m@example.no", name: "Michael", verified: true },
-      current_workspace: acme,
-      workspaces: [acme],
-      two_factor: {
-        available: true,
-        enabled,
-        recovery_codes_left: enabled ? 7 : 0,
-        required_by: enabled ? [{ id: "w1", name: "Acme" }] : [secure],
-      },
-      locked_workspaces: enabled ? [] : [secure],
-    }),
-    cloud_workspace_members: () => [
-      { id: "u1", email: "m@example.no", name: "Michael", role: "admin" },
-      { id: "u2", email: "ola@example.no", name: "Ola Nordmann", role: "member" },
-      { id: "u3", email: "kari@example.no", name: "Kari", role: "owner" },
-    ],
-    cloud_two_factor_members: () => ({ u1: enabled, u2: false, u3: true }),
-    cloud_two_factor_setup: () => DEMO_TWO_FACTOR_SETUP,
-    cloud_two_factor_enable: () => DEMO_RECOVERY_CODES,
-    cloud_two_factor_recovery_codes: () => DEMO_RECOVERY_CODES,
-  };
-}
 
 const params = new URLSearchParams(location.search);
 const which = params.get("case") ?? "recommended";

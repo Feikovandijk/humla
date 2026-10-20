@@ -3,8 +3,6 @@ import {
   relativeTime,
   conversationTitle,
   conversationRows,
-  usageTone,
-  liveChatErrorCopy,
   groundingLikelyTruncated,
   GROUNDING_CHAR_BUDGET,
   GROUNDING_TEXT_BUDGET,
@@ -79,61 +77,6 @@ describe("conversationTitle", () => {
   it("falls back to 'New chat' for an empty or whitespace title", () => {
     expect(conversationTitle({ title: "" })).toBe("New chat");
     expect(conversationTitle({ title: "   " })).toBe("New chat");
-  });
-});
-
-describe("usageTone", () => {
-  it("stays default below 70%", () => {
-    expect(usageTone(0, 100)).toBe("default");
-    expect(usageTone(69, 100)).toBe("default");
-  });
-
-  it("warns from 70% to 89%", () => {
-    expect(usageTone(70, 100)).toBe("warning");
-    expect(usageTone(89, 100)).toBe("warning");
-  });
-
-  it("goes danger at 90% and once used reaches or passes the cap", () => {
-    expect(usageTone(90, 100)).toBe("danger");
-    expect(usageTone(100, 100)).toBe("danger");
-    expect(usageTone(5, 3)).toBe("danger");
-  });
-
-  it("is default for a non-positive cap (total edge)", () => {
-    expect(usageTone(0, 0)).toBe("default");
-    expect(usageTone(2, 0)).toBe("default");
-  });
-});
-
-describe("liveChatErrorCopy", () => {
-  const owner = { isOwner: true, ownerName: "Ada" };
-  const member = { isOwner: false, ownerName: "Ada" };
-
-  it("gives the owner a fix path and the member an ask-owner line for a rejected key", () => {
-    expect(liveChatErrorCopy("byok_key_invalid", owner)).toMatch(/Organization → Workspace chat/);
-    expect(liveChatErrorCopy("byok_key_invalid", member)).toMatch(/ask Ada/);
-  });
-
-  it("distinguishes provider quota from the managed add-on upsell", () => {
-    const o = liveChatErrorCopy("byok_provider_quota", owner)!;
-    const m = liveChatErrorCopy("byok_provider_quota", member)!;
-    expect(o).toMatch(/out of quota/);
-    expect(m).toMatch(/ask Ada/);
-    // Never the managed add-on's upsell wording.
-    expect(o).not.toMatch(/add-on/);
-    expect(m).not.toMatch(/add-on/);
-  });
-
-  it("treats an unavailable key as transient for everyone", () => {
-    expect(liveChatErrorCopy("byok_key_unavailable", owner)).toMatch(/try again shortly/);
-    expect(liveChatErrorCopy("byok_key_unavailable", member)).toMatch(/try again shortly/);
-  });
-
-  it("returns null for reasons outside the taxonomy (caller falls back)", () => {
-    expect(liveChatErrorCopy("quota_exhausted", owner)).toBeNull();
-    expect(liveChatErrorCopy("chat_not_activated", owner)).toBeNull();
-    expect(liveChatErrorCopy(undefined, owner)).toBeNull();
-    expect(liveChatErrorCopy("", owner)).toBeNull();
   });
 });
 

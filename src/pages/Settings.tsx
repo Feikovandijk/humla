@@ -8,8 +8,6 @@ import { TranscriptionTab } from "./settings/tabs/Transcription";
 import { SummaryTab } from "./settings/tabs/Summary";
 import { ChatTab } from "./settings/tabs/Chat";
 import { AboutTab } from "./settings/tabs/About";
-import { AccountTab } from "./settings/tabs/Account";
-import { OrganizationTab } from "./settings/tabs/Organization";
 import { useSettings } from "./settings/useSettings";
 
 // Section registry: maps the 5-section IA (see sections.ts) to content.
@@ -44,12 +42,6 @@ export function Settings() {
     ),
     summaries: <SummaryTab s={settings.s} update={settings.update} />,
     chat: <ChatTab s={settings.s} update={settings.update} />,
-    account: (
-      <>
-        <AccountTab s={settings.s} update={settings.update} />
-        <OrganizationTab />
-      </>
-    ),
     general: (
       <>
         <GeneralTab />

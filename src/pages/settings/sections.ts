@@ -8,7 +8,6 @@ export type SectionId =
   | "transcription"
   | "summaries"
   | "chat"
-  | "account"
   | "general";
 
 export const SECTIONS: { id: SectionId; label: string }[] = [
@@ -16,13 +15,13 @@ export const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "transcription", label: "Transcription" },
   { id: "summaries", label: "Summaries" },
   { id: "chat", label: "Chat" },
-  { id: "account", label: "Account" },
   { id: "general", label: "General" },
 ];
 
 const LEGACY_TAB_MAP: Record<string, SectionId> = {
   about: "general",
-  organization: "account",
+  account: "general",
+  organization: "general",
   keys: "transcription",
   summary: "summaries",
 };

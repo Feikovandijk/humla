@@ -139,13 +139,12 @@ export function resolveHotkeyAction(ctx: {
   phase: RecordingPhase;
   activeNoteId: string | null;
   routeNoteId: string | null;
-  routeReadOnly: boolean;
 }): HotkeyAction {
   if (ctx.phase === "recording" || ctx.phase === "paused") return { kind: "stop" };
   // Anything other than a clean idle is the pipeline mid-transition —
   // including `idle` that still carries a note id, which is the post-stop
   // chain finishing. Starting there would race it.
   if (ctx.phase !== "idle" || ctx.activeNoteId !== null) return { kind: "ignore" };
-  if (ctx.routeNoteId && !ctx.routeReadOnly) return { kind: "start", noteId: ctx.routeNoteId };
+  if (ctx.routeNoteId) return { kind: "start", noteId: ctx.routeNoteId };
   return { kind: "startNew" };
 }
