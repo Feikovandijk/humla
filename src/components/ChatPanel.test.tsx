@@ -3,10 +3,31 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { ChatPanel, type ChatSessionControls } from "./ChatPanel";
-import { mockTauri } from "../test/tauri";
+import { mockTauri as baseMockTauri } from "../test/tauri";
 import type { ChatMessageDto, Folder, Note } from "../lib/ipc";
 import { useCloudStore, DISCONNECTED, type CloudRole } from "../lib/cloud";
 import { useNotesStore } from "../lib/store";
+
+// These tests exercise the panel on a cloud provider, which was the app's
+// default before chat moved to local-by-default; pin it unless a test says
+// otherwise.
+function mockTauri(...[handlers = {}, options]: Parameters<typeof baseMockTauri>) {
+  const own = handlers.settings_get;
+  return baseMockTauri(
+    {
+      ...handlers,
+      settings_get: async (args) => {
+        const value = own
+          ? await own(args)
+          : (args as { key?: string }).key === "onboarding_completed"
+            ? "true"
+            : null;
+        return value ?? ((args as { key?: string }).key === "chat_provider" ? "openai" : null);
+      },
+    },
+    options,
+  );
+}
 
 // Signed into a MANAGED (billing-enabled) workspace with the given role, so the
 // BYOK activation pane (#76) applies. The roster's owner is "Ada" for
