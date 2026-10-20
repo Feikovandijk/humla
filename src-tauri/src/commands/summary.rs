@@ -100,7 +100,7 @@ pub(super) fn summary_provider_id(
             .flatten()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "openai".into())
+            .unwrap_or_else(|| "local".into())
     } else {
         note_override.to_string()
     };
@@ -557,13 +557,14 @@ mod tests {
     }
 
     #[test]
-    fn a_blank_summary_provider_row_still_means_openai() {
+    fn a_blank_summary_provider_row_means_local() {
         let dir = tempfile::tempdir().unwrap();
         let conn = db::open(&dir.path().join("t.sqlite")).unwrap();
         db::set_setting(&conn, "summary_provider", "  ").unwrap();
+        db::set_setting(&conn, "local_llm_model", "gemma4:12b-mlx").unwrap();
         let note = db::create_note(&conn, "no", "meeting", "").unwrap();
-        let p = resolve_provider(&conn, &note, Some("sk-test".into())).unwrap();
-        assert_eq!(p.base_url, openai::BASE);
+        let p = resolve_provider(&conn, &note, None).unwrap();
+        assert_eq!(p.dispatch(), Dispatch::OpenAiCompatible);
     }
 
     #[test]

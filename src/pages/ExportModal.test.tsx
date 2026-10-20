@@ -234,3 +234,50 @@ describe("the export modal's team hint", () => {
     await waitFor(() => expect(exportSpy).toHaveBeenCalled());
   });
 });
+
+describe("raw recording export", () => {
+  function rawSetup(destination: string | null = "/Users/me/raw.wav", fail = false) {
+    const exported = vi.fn();
+    mockTauri({
+      note_recording_audio: () => [
+        { sessionId: "take1", sessionIndex: 1, source: "mic" },
+        { sessionId: "take1", sessionIndex: 1, source: "sys" },
+        { sessionId: "take2", sessionIndex: 2, source: "mic" },
+      ],
+      "plugin:dialog|save": () => destination,
+      export_recording_audio: (args) => {
+        if (fail) throw new Error("disk full");
+        exported(args);
+      },
+    });
+    render(<ExportModal note={makeNote({ summary: "", transcript: "", body: "" })}
+      open onClose={vi.fn()} onCreateTeam={vi.fn()} flushEdits={() => Promise.resolve()} />);
+    return exported;
+  }
+
+  it("exports a chosen take and source even without any transcript", async () => {
+    const exported = rawSetup();
+    await userEvent.click(await screen.findByRole("button", { name: "Export recording 1 system WAV" }));
+    await waitFor(() => expect(exported).toHaveBeenCalledWith({
+      noteId: "n1", sessionId: "take1", source: "sys", path: "/Users/me/raw.wav",
+    }));
+    expect(screen.getByRole("button", { name: "Export recording 2 microphone WAV" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Export recording 2 system WAV" })).toBeNull();
+  });
+
+  it("leaves the recording alone when saving is cancelled", async () => {
+    const exported = rawSetup(null);
+    await userEvent.click(await screen.findByRole("button", { name: "Export recording 1 microphone WAV" }));
+    expect(exported).not.toHaveBeenCalled();
+  });
+
+  it("reports export failures and lets the user retry", async () => {
+    rawSetup("/Users/me/raw.wav", true);
+    const button = await screen.findByRole("button", { name: "Export recording 1 microphone WAV" });
+    await userEvent.click(button);
+    await waitFor(() => expect(useRecordingStore.getState().errors.at(-1)).toMatchObject({
+      noteId: "n1", kind: "export", message: "Error: disk full",
+    }));
+    expect(button).toBeEnabled();
+  });
+});

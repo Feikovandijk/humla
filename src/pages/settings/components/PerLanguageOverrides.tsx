@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { LANGUAGES, languageOptionLabel } from "../../../lib/languages";
 import type { ProviderConfig, TranscribeConfig } from "../../../lib/ipc";
-import { ProviderConfigForm } from "./ProviderConfigForm";
+import { ProviderConfigForm, localModelsFor, type OnDeviceConfig } from "./ProviderConfigForm";
 import { Select } from "../../../components/ui/Select";
 import type { LocalState } from "../types";
 
@@ -15,11 +15,13 @@ export function PerLanguageOverrides({
   setLanguageOverride,
   removeLanguageOverride,
   local,
+  parakeetDownloaded = false,
 }: {
   config: TranscribeConfig;
   setLanguageOverride: (language: string, cfg: ProviderConfig) => Promise<void>;
   removeLanguageOverride: (language: string) => Promise<void>;
   local: LocalState;
+  parakeetDownloaded?: boolean;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
   const entries = Object.entries(config.per_language).sort(([a], [b]) =>
@@ -29,9 +31,9 @@ export function PerLanguageOverrides({
   return (
     <div className="flex flex-col gap-3">
       <p className="text-xs text-[var(--color-text-muted)]">
-        Override the default provider for specific recording languages.
+        Override the default model for specific recording languages.
         Useful when one model is materially better for a given language —
-        e.g. Parakeet Ultra for English, Deepgram Nova-3 for another.
+        e.g. Parakeet Ultra for English.
       </p>
 
       {entries.length > 0 ? (
@@ -47,7 +49,7 @@ export function PerLanguageOverrides({
         </div>
       ) : (
         <p className="text-xs text-[var(--color-text-muted)] italic">
-          No overrides — every recording uses the default provider.
+          No overrides — every recording uses the default model.
         </p>
       )}
 
@@ -64,6 +66,7 @@ export function PerLanguageOverrides({
         <AddOverrideForm
           existingLanguages={Object.keys(config.per_language)}
           local={local}
+          parakeetDownloaded={parakeetDownloaded}
           onCancel={() => setShowAddForm(false)}
           onAdd={async (language, cfg) => {
             await setLanguageOverride(language, cfg);
@@ -125,11 +128,13 @@ function summariseProvider(cfg: ProviderConfig): string {
 function AddOverrideForm({
   existingLanguages,
   local,
+  parakeetDownloaded = false,
   onCancel,
   onAdd,
 }: {
   existingLanguages: string[];
   local: LocalState;
+  parakeetDownloaded?: boolean;
   onCancel: () => void;
   onAdd: (language: string, cfg: ProviderConfig) => Promise<void>;
 }) {
@@ -141,10 +146,22 @@ function AddOverrideForm({
   );
   const initialLanguage = available[0]?.value ?? "no";
   const [language, setLanguage] = useState(initialLanguage);
-  const [cfg, setCfg] = useState<ProviderConfig>({
-    provider: "openai",
-    model: "whisper-1",
+  const [picked, setPicked] = useState<OnDeviceConfig>({
+    provider: "local",
+    model_id: "",
+    preset: "quality",
+    use_gpu: true,
   });
+  // A model picked for one language may not suit the next; fall back to the
+  // first that does.
+  const usable = localModelsFor(local.models, language);
+  const cfg: OnDeviceConfig =
+    (picked.provider === "parakeet" && parakeetDownloaded) ||
+    (picked.provider === "local" && usable.some((m) => m.id === picked.model_id))
+      ? picked
+      : usable.length === 0 && parakeetDownloaded
+        ? { provider: "parakeet", model: "ultra" }
+        : { provider: "local", model_id: usable[0]?.id ?? "", preset: "quality", use_gpu: true };
 
   return (
     <div className="flex flex-col gap-3 px-3 py-3 rounded-md border border-[var(--color-line)] bg-[var(--color-canvas)]">
@@ -159,12 +176,19 @@ function AddOverrideForm({
           label: languageOptionLabel(l),
         }))}
       />
-      <ProviderConfigForm
-        value={cfg}
-        onChange={setCfg}
-        localModels={local.models}
-        filterLocalToLanguage={language}
-      />
+      {usable.length > 0 || parakeetDownloaded ? (
+        <ProviderConfigForm
+          value={cfg}
+          onChange={setPicked}
+          localModels={local.models}
+          filterLocalToLanguage={language}
+          parakeetDownloaded={parakeetDownloaded}
+        />
+      ) : (
+        <p className="text-xs text-[var(--color-text-muted)]">
+          No downloaded model can transcribe this language — download one in the list above.
+        </p>
+      )}
       <div className="flex items-center gap-2">
         <button
           type="button"
@@ -176,7 +200,8 @@ function AddOverrideForm({
         <button
           type="button"
           onClick={() => onAdd(language, cfg)}
-          className="text-sm px-3 py-1.5 rounded-md bg-[var(--color-text)] text-[var(--color-canvas)]"
+          disabled={usable.length === 0 && !parakeetDownloaded}
+          className="text-sm px-3 py-1.5 rounded-md bg-[var(--color-text)] text-[var(--color-canvas)] disabled:opacity-40"
         >
           Add
         </button>

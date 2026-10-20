@@ -36,11 +36,11 @@ export type EditableKey = Exclude<
 export type { Provider } from "../../lib/providers";
 
 export const DEFAULTS: Record<EditableKey, string> = {
-  language: "no",
+  language: "en",
   default_summary_preset: "meeting",
   diarize_model: DEFAULT_DIARIZE_ENGINE,
   community1_threshold: "0.5",
-  keep_audio: "false",
+  keep_audio: "true",
   transcribe_manually: "false",
   keep_awake: "true",
   close_to_tray: "false",
@@ -48,11 +48,11 @@ export const DEFAULTS: Record<EditableKey, string> = {
   custom_vocabulary: "",
   summary_model: "gpt-5.4-mini",
   anthropic_model: "claude-sonnet-5",
-  summary_provider: "openai",
+  summary_provider: "local",
   local_llm_base_url: "http://localhost:11434/v1",
   local_llm_model: "",
   local_llm_think: "false",
-  chat_provider: "openai",
+  chat_provider: "ollama",
   chat_model: "",
   // Empty = follow the chat server, embeddinggemma (#179).
   embed_base_url: "",

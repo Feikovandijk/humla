@@ -1,23 +1,18 @@
 import type { ReactNode } from "react";
 import { DiarizeModelManager } from "../components/DiarizeModelManager";
 import { Disclosure } from "../components/Disclosure";
-import { LocalModelManager } from "../components/LocalModelManager";
 import { ParakeetModelManager } from "../components/ParakeetModelManager";
 import { PerLanguageOverrides } from "../components/PerLanguageOverrides";
-import { ProviderConfigForm } from "../components/ProviderConfigForm";
+import { LocalTuningRows } from "../components/ProviderConfigForm";
+import { TranscriptionModelPicker } from "../components/TranscriptionModelPicker";
 import { Row, Section } from "../components/Section";
 import { RenameYouRow } from "../components/RenameYouRow";
 import { Select } from "../../../components/ui/Select";
-import { ProviderKeyCard, type KeyProvider } from "../../../components/provider/ProviderKeyCard";
 import { NEMOTRON_MAX_SPEAKERS } from "../../../lib/diarizeEngine";
-import { KEY_PROVIDERS } from "../../../lib/providers";
 import { LANGUAGES, languageOptionLabel } from "../../../lib/languages";
 import { inputClass } from "../types";
 import type { SettingsHook } from "../useSettings";
 
-// The selected cloud provider's key card renders right under the picker;
-// the others sit in Advanced so keys for override-only providers stay
-// reachable. Copy comes from the card's per-provider defaults.
 
 // Engine choice row: label + description left, pick-radio right, the
 // download/status manager underneath. The radio is presence-gated — an
@@ -105,12 +100,12 @@ export function TranscriptionTab({
   local,
   downloadModel,
   deleteModel,
-  diarize,
-  downloadDiarize,
-  deleteDiarize,
   parakeet,
   downloadParakeet,
   deleteParakeet,
+  diarize,
+  downloadDiarize,
+  deleteDiarize,
 }: Pick<
   SettingsHook,
   | "s"
@@ -122,41 +117,44 @@ export function TranscriptionTab({
   | "local"
   | "downloadModel"
   | "deleteModel"
-  | "diarize"
-  | "downloadDiarize"
-  | "deleteDiarize"
   | "parakeet"
   | "downloadParakeet"
   | "deleteParakeet"
+  | "diarize"
+  | "downloadDiarize"
+  | "deleteDiarize"
 >) {
   const def = transcribeConfig.default;
 
   return (
     <>
       <Section title="Transcription">
-        <ProviderConfigForm
+        <TranscriptionModelPicker
           value={def}
           onChange={setDefaultConfig}
-          localModels={local.models}
+          local={local}
+          onDownload={downloadModel}
+          onDelete={deleteModel}
+          setLanguageOverride={setLanguageOverride}
         />
-        {def.provider === "local" && !local.models.some((m) => m.downloaded) && (
-          <p className="text-xs text-[var(--color-danger)] py-3">
-            No local model is downloaded. Download one under Advanced below
-            before recording.
-          </p>
-        )}
+        <ParakeetModelManager
+          state={parakeet}
+          selected={def.provider === "parakeet"}
+          onSelect={() => setDefaultConfig({ provider: "parakeet", model: "ultra" })}
+          onDownload={downloadParakeet}
+          onDelete={deleteParakeet}
+        />
         {def.provider === "parakeet" && !parakeet.status?.downloaded && (
           <p className="text-xs text-[var(--color-danger)] py-3">
-            Parakeet Ultra isn't downloaded. Download it under Advanced → Local
-            models before recording.
+            Parakeet Ultra isn't downloaded. Download it above before recording.
           </p>
         )}
-        {def.provider !== "local" && def.provider !== "parakeet" && (
-          <ProviderKeyCard provider={def.provider as KeyProvider} />
+        {def.provider === "local" && (
+          <LocalTuningRows value={def} onChange={setDefaultConfig} />
         )}
         <Row
           label="Language"
-          description="Default for new notes. Each note has its own language chip in the header that overrides this."
+          description="Default for new notes. Each recording asks you to choose English or Dutch after it starts."
           control={
             <Select
               value={s.language}
@@ -172,59 +170,16 @@ export function TranscriptionTab({
           <div>
             <div className="text-sm">Per-language overrides</div>
             <p className="text-xs text-[var(--color-text-muted)] mt-0.5 mb-3">
-              Route specific recording languages to a different provider than
-              the default above — e.g. Parakeet Ultra for English, Deepgram
-              Nova-3 for another language.
+              Route specific recording languages to a different model than
+              the default above, such as Parakeet Ultra for English.
             </p>
             <PerLanguageOverrides
               config={transcribeConfig}
               setLanguageOverride={setLanguageOverride}
               removeLanguageOverride={removeLanguageOverride}
               local={local}
+              parakeetDownloaded={parakeet.status?.downloaded ?? false}
             />
-          </div>
-          <div>
-            <div className="text-sm">Local models</div>
-            <ParakeetModelManager
-              state={parakeet}
-              selected={def.provider === "parakeet"}
-              onSelect={() => setDefaultConfig({ provider: "parakeet", model: "ultra" })}
-              onDownload={downloadParakeet}
-              onDelete={deleteParakeet}
-            />
-            <LocalModelManager
-              state={local}
-              activeId={def.provider === "local" ? def.model_id : ""}
-              language={s.language}
-              onDownload={downloadModel}
-              onDelete={deleteModel}
-              setLanguageOverride={setLanguageOverride}
-              onSelect={(id) => {
-                // Selecting a local model from the manager pins it as the
-                // default's model_id. If currently on a non-local default,
-                // switch them to Local with this model — matches the v0.23
-                // implicit behaviour of the radio button.
-                if (def.provider === "local") {
-                  setDefaultConfig({ ...def, model_id: id });
-                } else {
-                  setDefaultConfig({
-                    provider: "local",
-                    model_id: id,
-                    preset: "quality",
-                    use_gpu: true,
-                  });
-                }
-              }}
-            />
-          </div>
-          <div>
-            <div className="text-sm">Other API keys</div>
-            <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
-              Keys for providers used only by per-language overrides.
-            </p>
-            {KEY_PROVIDERS.filter((p) => p !== def.provider).map((p) => (
-              <ProviderKeyCard key={p} provider={p} />
-            ))}
           </div>
         </Disclosure>
       </Section>
@@ -311,7 +266,6 @@ export function TranscriptionTab({
           <p className="text-xs text-[var(--color-text-muted)] mt-2">
             Comma- or newline-separated. Names, jargon, and uncommon
             spellings — biases the transcriber toward these tokens.
-            <code> gpt-4o-transcribe-diarize </code> ignores it.
           </p>
         </Row>
       </Section>

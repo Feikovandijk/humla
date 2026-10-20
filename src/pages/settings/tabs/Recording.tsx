@@ -36,7 +36,7 @@ export function RecordingSection({
           // text names the cost — no playback, no re-detection.
           description={
             keeping
-              ? "Keep recordings for playback and speaker re-detection. Roughly 1 MB per minute per channel."
+              ? "Keep recordings for playback and speaker re-detection. Export microphone and system WAVs from the note menu. Roughly 1 MB per minute per channel."
               : "No audio is stored on this Mac — transcript only; playback and speaker re-detection unavailable."
           }
           control={

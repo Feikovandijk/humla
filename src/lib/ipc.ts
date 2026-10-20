@@ -330,6 +330,12 @@ export type TimelineRepair = {
 
 // One recording session (a single recording_start→stop cycle) for a note.
 // Drives the playback carousel + the styled reader's session dividers.
+export type RecordingAudio = {
+  sessionId: string;
+  sessionIndex: number;
+  source: "mic" | "sys";
+};
+
 export type NoteSession = {
   id: string;
   index: number;
@@ -558,6 +564,11 @@ export const ipc = {
     invoke<void>("note_timeline_delete_chunk", { noteId, sessionId, chunkIdx }),
   openInFinder: (path: string) => invoke<void>("open_in_finder", { path }),
   // Write a note's selected content to the chosen path as one combined file.
+  noteRecordingAudio: (noteId: string) =>
+    invoke<RecordingAudio[]>("note_recording_audio", { noteId }),
+  exportRecordingAudio: (noteId: string, sessionId: string, source: RecordingAudio["source"], path: string) =>
+    invoke<void>("export_recording_audio", { noteId, sessionId, source, path }),
+
   exportNote: (noteId: string, spec: ExportSpec) =>
     invoke<void>("export_note", { noteId, spec }),
   rediarizeNote: (noteId: string) => invoke<void>("rediarize_note", { noteId }),
@@ -616,6 +627,8 @@ export const ipc = {
     invoke<number>("local_llm_embed_probe", { baseUrl, model }),
 
   recordingStart: (noteId: string) => invoke<void>("recording_start", { noteId }),
+  recordingSelectLanguage: (noteId: string, sessionId: string, language: string) =>
+    invoke<void>("recording_select_language", { noteId, sessionId, language }),
   recordingStop: () => invoke<void>("recording_stop"),
   // Import an existing audio file into a NEW note and run it through the full
   // transcription pipeline. Language + expected speaker count come from the
@@ -925,6 +938,7 @@ export type { SummaryProvider };
 export type RecordingStatus = {
   noteId: string | null;
   phase: RecordingPhase;
+  languageSessionId?: string;
   pending?: number;
   done?: number;
   deferred?: boolean;

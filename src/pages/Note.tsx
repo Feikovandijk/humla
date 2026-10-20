@@ -33,8 +33,7 @@ import { ipc, onSummaryThinkingDelta, onSummaryContentDelta, type Note as TNote,
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { SUMMARY_CAPABLE, type SummaryProvider } from "../lib/providers";
 import { useLiveSetting } from "../lib/settingsBus";
-import { useDownloadStore, useNotesStore, useRecordingStore } from "../lib/store";
-import { computeSetupStatus } from "../lib/setupStatus";
+import { useNotesStore, useRecordingStore } from "../lib/store";
 import { useOwnerName, useCloudStore } from "../lib/cloud";
 import { billingCta, planIsLive } from "../lib/billing";
 import { extractSpeakerLabels, renameSpeakerInTranscript } from "../lib/speakers";
@@ -369,14 +368,14 @@ export function Note() {
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
   const [billingOpen, setBillingOpen] = useState(false);
-  const [uiLang, setUiLang] = useState<string>("no");
-  const [globalProvider, setGlobalProvider] = useState<string>("openai");
+  const [uiLang, setUiLang] = useState<string>("en");
+  const globalProvider = useLiveSetting("summary_provider") || "local";
   // Device-wide audio retention (#24). Off is the shipped default, so an
   // unresolved read means off — don't promise a player that isn't coming. Read
   // through the settings bus, not a plain fetch: Settings is a dialog over a
   // *pinned* router location, so this view never sees the trip to /settings and
   // back and can't use navigation as its cue to re-read.
-  const keepAudio = useLiveSetting("keep_audio") === "true";
+  const keepAudio = (useLiveSetting("keep_audio") ?? "true") === "true";
   // Live reasoning + content streamed from the local LLM. Cleared each time a
   // new summarize starts and again when the summary lands. Scoped by note id
   // so a delta from a different note's run doesn't leak into this view.
@@ -476,9 +475,6 @@ export function Note() {
     ipc.getSetting("language").then((v) => {
       if (!cancelled && v) setUiLang(v);
     });
-    ipc.getSetting("summary_provider").then((v) => {
-      if (!cancelled && v) setGlobalProvider(v);
-    });
     return () => {
       cancelled = true;
     };
@@ -560,7 +556,7 @@ export function Note() {
   const effectiveProvider =
     draft?.summary_provider && draft.summary_provider.length > 0
       ? draft.summary_provider
-      : globalProvider || "openai";
+      : globalProvider || "local";
   const isLocalProvider = effectiveProvider === "local";
 
   const recPhase = useRecordingStore((s) => s.status);
@@ -1649,6 +1645,16 @@ export function Note() {
 
                 {(isRecording || isPaused) && <ListeningHeader noteId={draft.id} />}
 
+                {!recActive && (!hasTranscript || timeline.length === 0 || !timelineCoversTranscript) &&
+                  (!!playbackUrl || sessions.some((s) => s.hasPlayback)) && (
+                    <TranscriptPlayer
+                      noteId={draft.id} timeline={[]} setTimeline={setTimeline}
+                      sessions={sessions} fallbackPlaybackUrl={playbackUrl}
+                      audioAvailable keepAudio={keepAudio} disabled={readOnly}
+                      bottomAligned={false}
+                    />
+                  )}
+
                 {hasTranscript ? (
                   <>
                     <div className="shrink-0">
@@ -1954,38 +1960,11 @@ export function NoteToolbar({
   const [teamHintOpen, setTeamHintOpen] = useState(false);
 
   async function record() {
-    // Pre-flight: don't start a doomed recording when the pipeline isn't
-    // functional (same shared predicate as the nag chip + recap). Covers a
-    // missing mic AND a missing/unconfigured STT path. A failed Record click
-    // is an ERROR, not a confirmation: it goes through the persistent error
-    // toast (which carries the Open Settings affordance), never a
-    // 2.5-second flash — that read as "the button did nothing".
-    try {
-      const setup = await computeSetupStatus();
-      if (!setup.pipelineReady) {
-        const downloading = useDownloadStore.getState().active;
-        const message = !setup.micGranted
-          ? "Can't record — microphone permission isn't granted yet. Grant it in Settings."
-          : setup.stt.kind === "local"
-            ? downloading?.modelId === setup.stt.model
-              ? `Can't record yet — the transcription model (${setup.stt.model}) is still downloading. Try again when it finishes.`
-              : `Can't record — the selected transcription model (${setup.stt.model}) isn't downloaded. Download it in Settings → Transcription.`
-            : `Can't record — no API key stored for ${setup.stt.provider}. Add one in Settings → Transcription.`;
-        // Sticky: this blocks the user's next action; auto-dismissing it
-        // read as "the button did nothing". NOTE: mentioning "Settings" in
-        // these messages is what makes the Toaster attach its Open Settings
-        // shortcut — keep that word if you rewrite the copy.
-        useRecordingStore.getState().pushError({ noteId, message, sticky: true });
-        return;
-      }
-    } catch {
-      // If the predicate can't be computed, fall through and attempt the
-      // recording — the backend still surfaces real failures as errors.
-    }
+    // The backend checks both offered languages and microphone permission.
     try {
       await ipc.recordingStart(noteId);
     } catch (e) {
-      useRecordingStore.getState().pushError({ noteId, message: String(e) });
+      useRecordingStore.getState().pushError({ noteId, message: String(e), sticky: true });
     }
   }
   async function onDelete() {

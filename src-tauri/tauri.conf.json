@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Humla",
-  "version": "0.69.1",
+  "version": "0.70.0",
   "identifier": "no.humla.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -50,9 +50,9 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/michaelwilhelmsen/humla/releases/latest/download/latest.json"
+        "https://github.com/Feikovandijk/humla/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJDMjkzMDJGQjYxQTcyQTMKUldTamNocTJMekFwTEhISnRDNmJqemxSaHo3ejdmcFVZODYrMFdjaGQwNnUxTnVhczE1Skd5L2wK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJBNTMzNUM1OEE3NTZCMUMKUldRY2EzV0t4VFZUdXB1U2xkZ0U0KzZsNDUwc0xLZ0xnK3c0SCtlL0NIZll2OWhXZnJBMlI2QzIK"
     }
   }
 }

@@ -2,16 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { Row, Section } from "../components/Section";
 import { s } from "../components/format";
-import { Select } from "../../../components/ui/Select";
 import { OllamaConnect } from "../../../components/provider/OllamaConnect";
-import { ProviderKeyCard } from "../../../components/provider/ProviderKeyCard";
 import { CommandSnippet } from "../../../components/CommandSnippet";
 import { useOllamaProbe } from "../../../components/provider/useOllamaProbe";
-import { cloudChatHint, localChatHint } from "../../../components/provider/useChatReadiness";
+import { localChatHint } from "../../../components/provider/useChatReadiness";
 import { useEmbedProbe } from "../../../components/provider/useEmbedProbe";
-import { useProviderKey } from "../../../components/provider/useProviderKey";
-import { useCloudModels } from "../../../components/provider/useCloudModels";
-import { CHAT_PROVIDERS } from "../types";
 import {
   EMBEDDING_OLLAMA_MODEL,
   RECOMMENDED_OLLAMA_MODEL,
@@ -20,236 +15,124 @@ import {
 import { ipc } from "../../../lib/ipc";
 import type { SettingsHook } from "../useSettings";
 
-// AI Chat provider setting (issue #44). A dedicated provider choice, separate
-// from transcription/summary: OpenAI (cloud, shared key) or Ollama (local).
-// No chat behaviour yet — just the choice, its persistence, and a readiness
-// prompt saying exactly what's still missing. The embedding model is
-// auto-derived (text-embedding-3-small / embeddinggemma) and not surfaced here;
-// its setup lands with semantic retrieval.
-/** Whether a stored chat model id belongs to the given provider. Local ids are
- *  arbitrary strings, so nothing is claimed about them. */
-export function modelSuitsProvider(model: string, provider: string): boolean {
-  if (!model) return true;
-  if (provider === "anthropic") return model.startsWith("claude-");
-  if (provider === "openai") return !model.startsWith("claude-");
-  return true;
-}
-
+// AI Chat settings (issue #44): chat over your notes runs on a local LLM
+// server only — Ollama or any OpenAI-compatible one. useSettings pins
+// `chat_provider` to it. The readiness line says exactly what's still missing.
 export function ChatTab({ s, update }: Pick<SettingsHook, "s" | "update">) {
-  const isOllama = s.chat_provider === "ollama";
-  const isAnthropic = s.chat_provider === "anthropic";
-  // Every hook runs unconditionally (rules of hooks); the probe parks itself
-  // when chat isn't on Ollama, and the listing when no Anthropic key is stored.
-  const key = useProviderKey("openai", { enabled: !isOllama && !isAnthropic });
-  const anthropicKey = useProviderKey("anthropic", { enabled: isAnthropic });
-  const isOpenAi = !isOllama && !isAnthropic;
-  const openaiModels = useCloudModels("openai", key.hasKey, s.chat_model, { enabled: isOpenAi });
-  const anthropicModels = useCloudModels("anthropic", anthropicKey.hasKey, s.chat_model, {
-    enabled: isAnthropic,
-  });
-  const { reachable, installed } = useOllamaProbe(s.local_llm_base_url, { enabled: isOllama });
+  const { reachable, installed } = useOllamaProbe(s.local_llm_base_url);
   // The embedder's own address and name (#179), each empty meaning "follow the
   // chat server / embeddinggemma" — mirrored by `resolve_embed` in
   // src-tauri/src/commands/chat.rs, which resolves the same two blanks.
   const embedUrl = s.embed_base_url.trim() || s.local_llm_base_url;
   const embedModel = s.embed_model.trim() || EMBEDDING_OLLAMA_MODEL;
-  const embed = useEmbedProbe(embedUrl, embedModel, { enabled: isOllama });
+  const embed = useEmbedProbe(embedUrl, embedModel);
 
-  // Readiness — reflect exactly what's missing before chat can run. The local
-  // ladder is `localChatHint`, shared with the Note pane's own readiness.
-  let ready = false;
-  let hint = "";
-  if (isOllama) {
-    hint = localChatHint({
-      reachable,
-      installed,
-      model: s.chat_model,
-      baseUrl: s.local_llm_base_url,
-      where: "above",
-    });
-    ready = hint === "";
-  } else {
-    hint = cloudChatHint({
-      hasKey: isAnthropic ? anthropicKey.hasKey : key.hasKey,
-      model: s.chat_model,
-      providerLabel: isAnthropic ? "Anthropic" : "OpenAI",
-      where: "above",
-    });
-    ready = hint === "";
-  }
-
-  // Show the stored value even when it isn't a known option (e.g. an empty
-  // choice, or a model list the app doesn't hard-code) so nothing looks blank.
-  const openaiModelOptions = [
-    ...(s.chat_model === "" ? [{ value: "", label: "Choose a model…" }] : []),
-    ...openaiModels,
-  ];
+  // The ladder is `localChatHint`, shared with the Note pane's own readiness.
+  const hint = localChatHint({
+    reachable,
+    installed,
+    model: s.chat_model,
+    baseUrl: s.local_llm_base_url,
+    where: "above",
+  });
+  const ready = hint === "";
 
   return (
     <Section title="AI Chat">
       <p className="text-xs text-[var(--color-text-muted)] leading-relaxed py-3.5">
-        These settings cover chat over your personal notes. Workspace (Teams) chat is configured
-        per workspace under Organization → Workspace chat.
+        Ask questions grounded in your notes, fully offline against Ollama or any
+        OpenAI-compatible server. Workspace (Teams) chat is configured per workspace under
+        Organization → Workspace chat.
       </p>
-      <Row
-        label="Provider"
-        description="Ask questions grounded in your notes. Cloud (OpenAI) uses your key; Local runs fully offline against Ollama or any OpenAI-compatible server. Independent of your transcription and summary providers."
-        control={
-          <Select
-            value={s.chat_provider}
-            onChange={(v) => {
-              void update("chat_provider", v);
-              // One `chat_model` serves every provider, so a switch can leave
-              // a Claude id on OpenAI or the reverse. Clear it rather than
-              // carry it: "" is the state the tab already draws as
-              // "Choose a model…".
-              if (!modelSuitsProvider(s.chat_model, v)) void update("chat_model", "");
-            }}
-            options={CHAT_PROVIDERS}
-          />
-        }
+      <OllamaConnect
+        baseUrl={s.local_llm_base_url}
+        onBaseUrlChange={(v) => update("local_llm_base_url", v)}
+        model={s.chat_model}
+        onModelChange={(v) => update("chat_model", v)}
       />
-
-      {isAnthropic && (
-        <>
-          <Row
-            label="Model"
-            description="Claude models. Tool-calling is handled automatically."
-            control={
-              <Select
-                value={s.chat_model}
-                onChange={(v) => update("chat_model", v)}
-                options={
-                  s.chat_model === ""
-                    ? [{ value: "", label: "Choose a model…" }, ...anthropicModels]
-                    : anthropicModels
-                }
-              />
-            }
-          />
-          <ProviderKeyCard provider="anthropic" description="Used for chat over your notes." />
-          {/* Anthropic serves no embeddings endpoint, so retrieval here is the
-              keyword half only. */}
-          <p className="text-xs text-[var(--color-text-muted)] py-3">
-            Anthropic has no embedding model, so chat searches your notes by keyword rather than
-            by meaning. Cloud (OpenAI) or a local server give semantic search as well.
+      {isOllamaUrl(s.local_llm_base_url) && (
+        <div className="py-3 space-y-2">
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Runs fully offline. Don't have Ollama yet?{" "}
+            <button
+              type="button"
+              onClick={() => openExternal("https://ollama.com/download")}
+              className="underline hover:text-[var(--color-text)]"
+            >
+              Install Ollama
+            </button>
+            , then pull a tool-calling-capable model:
           </p>
-        </>
+          <CommandSnippet
+            command={`ollama pull ${s.chat_model || RECOMMENDED_OLLAMA_MODEL}`}
+            ariaLabel="Copy Ollama pull command"
+          />
+        </div>
       )}
 
-      {isOpenAi && (
-        <>
-          <Row
-            label="Model"
-            description="A GPT-5-class model. Reasoning and tool-calling are handled automatically."
-            control={
-              <Select
-                value={s.chat_model}
-                onChange={(v) => update("chat_model", v)}
-                options={openaiModelOptions}
-              />
-            }
-          />
-          <ProviderKeyCard
-            provider="openai"
-            description="Reused across cloud transcription, summaries, and chat — one key. Workspace chat uses the workspace's own key."
-          />
-        </>
-      )}
-
-      {isOllama && (
-        <>
-          <OllamaConnect
-            baseUrl={s.local_llm_base_url}
-            onBaseUrlChange={(v) => update("local_llm_base_url", v)}
-            model={s.chat_model}
-            onModelChange={(v) => update("chat_model", v)}
-          />
-          {isOllamaUrl(s.local_llm_base_url) && (
-            <div className="py-3 space-y-2">
-              <p className="text-xs text-[var(--color-text-muted)]">
-                Runs fully offline. Don't have Ollama yet?{" "}
-                <button
-                  type="button"
-                  onClick={() => openExternal("https://ollama.com/download")}
-                  className="underline hover:text-[var(--color-text)]"
-                >
-                  Install Ollama
-                </button>
-                , then pull a tool-calling-capable model:
-              </p>
-              <CommandSnippet
-                command={`ollama pull ${s.chat_model || RECOMMENDED_OLLAMA_MODEL}`}
-                ariaLabel="Copy Ollama pull command"
-              />
-            </div>
-          )}
-
-          {/* Semantic retrieval (#48, #179). Optional — chat degrades to
-              keyword-only — so this never blocks the readiness gate above.
-              The embedder needs its own address because the chat server is
-              often not the one that can embed: mlx_lm.server serves no
-              /v1/embeddings at all, and llama-server wants its own process. */}
-          <div className="py-3 space-y-3 border-t border-[var(--color-line)]">
-            <p className="text-xs text-[var(--color-text-muted)]">
-              Semantic search finds answers by meaning, not just keywords. It needs an embedding
-              model; leave these blank to use {EMBEDDING_OLLAMA_MODEL} on the chat server above.
+      {/* Semantic retrieval (#48, #179). Optional — chat degrades to
+          keyword-only — so this never blocks the readiness gate above.
+          The embedder needs its own address because the chat server is
+          often not the one that can embed: mlx_lm.server serves no
+          /v1/embeddings at all, and llama-server wants its own process. */}
+      <div className="py-3 space-y-3 border-t border-[var(--color-line)]">
+        <p className="text-xs text-[var(--color-text-muted)]">
+          Semantic search finds answers by meaning, not just keywords. It needs an embedding
+          model; leave these blank to use {EMBEDDING_OLLAMA_MODEL} on the chat server above.
+        </p>
+        <Row
+          label="Embedding server"
+          control={
+            <input
+              type="url"
+              value={s.embed_base_url}
+              onChange={(e) => update("embed_base_url", e.target.value)}
+              placeholder={s.local_llm_base_url}
+              aria-label="Embedding server URL"
+              className="w-56 text-sm px-3 py-1.5 rounded-md border border-[var(--color-line-visible)] bg-[var(--color-surface)] focus:border-[var(--color-text-muted)] transition-colors"
+            />
+          }
+        />
+        <Row
+          label="Embedding model"
+          control={
+            <input
+              type="text"
+              value={s.embed_model}
+              onChange={(e) => update("embed_model", e.target.value)}
+              placeholder={EMBEDDING_OLLAMA_MODEL}
+              aria-label="Embedding model"
+              className="w-56 text-sm px-3 py-1.5 rounded-md border border-[var(--color-line-visible)] bg-[var(--color-surface)] focus:border-[var(--color-text-muted)] transition-colors"
+            />
+          }
+        />
+        {embed.checking && (
+          <p className="text-xs text-[var(--color-text-muted)]">Checking the embedder…</p>
+        )}
+        {!embed.checking && embed.dims !== null && (
+          <p className="text-xs text-[var(--color-success)]">
+            Semantic search ready ✓ — {embedModel} answered with {embed.dims} dimensions.
+          </p>
+        )}
+        {!embed.checking && embed.error && (
+          <>
+            <p className="text-xs text-[var(--color-warning-text)]">
+              {embedModel} didn't answer at {embedUrl} — chat searches by keyword only.{" "}
+              {embed.error}
             </p>
-            <Row
-              label="Embedding server"
-              control={
-                <input
-                  type="url"
-                  value={s.embed_base_url}
-                  onChange={(e) => update("embed_base_url", e.target.value)}
-                  placeholder={s.local_llm_base_url}
-                  aria-label="Embedding server URL"
-                  className="w-56 text-sm px-3 py-1.5 rounded-md border border-[var(--color-line-visible)] bg-[var(--color-surface)] focus:border-[var(--color-text-muted)] transition-colors"
-                />
-              }
-            />
-            <Row
-              label="Embedding model"
-              control={
-                <input
-                  type="text"
-                  value={s.embed_model}
-                  onChange={(e) => update("embed_model", e.target.value)}
-                  placeholder={EMBEDDING_OLLAMA_MODEL}
-                  aria-label="Embedding model"
-                  className="w-56 text-sm px-3 py-1.5 rounded-md border border-[var(--color-line-visible)] bg-[var(--color-surface)] focus:border-[var(--color-text-muted)] transition-colors"
-                />
-              }
-            />
-            {embed.checking && (
-              <p className="text-xs text-[var(--color-text-muted)]">Checking the embedder…</p>
+            {isOllamaUrl(embedUrl) && (
+              <CommandSnippet
+                command={`ollama pull ${embedModel}`}
+                ariaLabel="Copy embedding-model pull command"
+              />
             )}
-            {!embed.checking && embed.dims !== null && (
-              <p className="text-xs text-[var(--color-success)]">
-                Semantic search ready ✓ — {embedModel} answered with {embed.dims} dimensions.
-              </p>
-            )}
-            {!embed.checking && embed.error && (
-              <>
-                <p className="text-xs text-[var(--color-warning-text)]">
-                  {embedModel} didn't answer at {embedUrl} — chat searches by keyword only.{" "}
-                  {embed.error}
-                </p>
-                {isOllamaUrl(embedUrl) && (
-                  <CommandSnippet
-                    command={`ollama pull ${embedModel}`}
-                    ariaLabel="Copy embedding-model pull command"
-                  />
-                )}
-              </>
-            )}
-            {/* Vectors are keyed by the model's name, so a working embedder and an
-                embedded corpus are two different facts — and only the first is
-                what the probe above establishes. */}
-            {!embed.checking && embed.dims !== null && <EmbedCorpusLine model={embedModel} />}
-          </div>
-        </>
-      )}
+          </>
+        )}
+        {/* Vectors are keyed by the model's name, so a working embedder and an
+            embedded corpus are two different facts — and only the first is
+            what the probe above establishes. */}
+        {!embed.checking && embed.dims !== null && <EmbedCorpusLine model={embedModel} />}
+      </div>
 
       <Row label="Status">
         <span className={ready ? "text-xs text-[var(--color-success)]" : "text-xs text-[var(--color-warning)]"}>
@@ -392,9 +275,8 @@ function RebuildIndexRow() {
             {running ? "Rebuilding…" : "Rebuild now"}
           </button>
           <p className="text-xs text-[var(--color-text-muted)] mt-1">
-            Re-reads your whole library and re-embeds anything that changed, which uses your
-            configured key — a few cents at most. Only affects what chat can find; your notes
-            aren't changed.
+            Re-reads your whole library and re-embeds anything that changed. Only affects what
+            chat can find; your notes aren't changed.
           </p>
         </>
       )}

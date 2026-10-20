@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ipc,
   onDiarizeDownloadProgress,
@@ -11,6 +11,7 @@ import {
   type TranscribeConfig,
 } from "../../lib/ipc";
 import { DIARIZE_ENGINE_LABEL, DIARIZE_ENGINES } from "../../lib/diarizeEngine";
+import { LANGUAGES } from "../../lib/languages";
 import { onSettingChange, writeSetting } from "../../lib/settingsBus";
 import { useDownloadStore } from "../../lib/store";
 import {
@@ -28,6 +29,25 @@ import {
 // the tabs need. Pulled out of the page component so individual tabs
 // can grab only the slices they care about, and so the page renders
 // stay focused on layout.
+// Settings offers on-device transcription only: a cloud default becomes the
+// recommended local model and cloud per-language overrides are dropped.
+// Returns `cfg` itself when it is already local-only.
+export function pinTranscribeLocal(cfg: TranscribeConfig): TranscribeConfig {
+  const perLanguage = Object.fromEntries(
+    Object.entries(cfg.per_language).filter(([, c]) => c.provider === "local" || c.provider === "parakeet"),
+  );
+  const cloudOverrides =
+    Object.keys(perLanguage).length !== Object.keys(cfg.per_language).length;
+  if ((cfg.default.provider === "local" || cfg.default.provider === "parakeet") && !cloudOverrides) return cfg;
+  return {
+    default:
+      cfg.default.provider === "local" || cfg.default.provider === "parakeet"
+        ? cfg.default
+        : { provider: "local", model_id: "large-v3-turbo-q5", preset: "quality", use_gpu: true },
+    per_language: perLanguage,
+  };
+}
+
 export function useSettings() {
   const [local, setLocal] = useState<LocalState>(EMPTY_LOCAL_STATE);
   // One per engine, so each can be downloaded or deleted on its own whichever
@@ -52,9 +72,11 @@ export function useSettings() {
   }, [updateDiarize]);
   const [s, setS] = useState<Record<EditableKey, string>>(DEFAULTS);
   const [transcribeConfig, setTranscribeConfig] = useState<TranscribeConfig>({
-    default: { provider: "openai", model: "whisper-1" },
+    default: { provider: "local", model_id: "large-v3-turbo-q5", preset: "quality", use_gpu: true },
     per_language: {},
   });
+  const transcribeConfigRef = useRef(transcribeConfig);
+  transcribeConfigRef.current = transcribeConfig;
 
   useEffect(() => {
     let cancelled = false;
@@ -68,14 +90,32 @@ export function useSettings() {
       if (cancelled) return;
       setLocal((p) => ({ ...p, models }));
       setParakeet((p) => ({ ...p, status: parakeetStatus }));
-      if (cfg) setTranscribeConfig(cfg);
+      if (cfg) {
+        const local = pinTranscribeLocal(cfg);
+        transcribeConfigRef.current = local;
+        setTranscribeConfig(local);
+        if (local !== cfg) void ipc.setTranscribeConfig(local).catch(() => {});
+      }
       const entries = await Promise.all(
         (Object.keys(DEFAULTS) as EditableKey[]).map(
           async (key) => [key, (await ipc.getSetting(key)) ?? DEFAULTS[key]] as const,
         ),
       );
       if (cancelled) return;
-      setS(Object.fromEntries(entries) as Record<EditableKey, string>);
+      const loaded = Object.fromEntries(entries) as Record<EditableKey, string>;
+      // Settings offers local providers only, so a cloud choice stored before
+      // that would be invisible and unchangeable: move it to local.
+      if (loaded.summary_provider !== "local") {
+        loaded.summary_provider = "local";
+        void writeSetting("summary_provider", "local");
+      }
+      if (loaded.chat_provider !== "ollama") {
+        loaded.chat_provider = "ollama";
+        loaded.chat_model = "";
+        void writeSetting("chat_provider", "ollama");
+        void writeSetting("chat_model", "");
+      }
+      setS(loaded);
     })();
     return () => {
       cancelled = true;
@@ -261,14 +301,15 @@ export function useSettings() {
       // model_id. Language-specific models never become the default;
       // they're picked via per-language overrides. Only fires when the
       // user is on the local provider.
+      const currentCfg = transcribeConfigRef.current;
       const downloadedInfo = models.find((m) => m.id === modelId);
       if (
         downloadedInfo?.kind === "multilingual" &&
         models.filter((m) => m.kind === "multilingual" && m.downloaded).length === 1 &&
-        transcribeConfig.default.provider === "local"
+        currentCfg.default.provider === "local"
       ) {
         await setDefaultConfig({
-          ...transcribeConfig.default,
+          ...currentCfg.default,
           model_id: modelId,
         });
       }
@@ -281,7 +322,8 @@ export function useSettings() {
       if (
         downloaded?.kind === "language_specific" &&
         downloaded.specificLanguage &&
-        !(downloaded.specificLanguage in transcribeConfig.per_language)
+        LANGUAGES.some((language) => language.value === downloaded.specificLanguage) &&
+        !(downloaded.specificLanguage in transcribeConfigRef.current.per_language)
       ) {
         flashLocal({
           kind: "suggest_language_override",
@@ -316,15 +358,16 @@ export function useSettings() {
       // the first still-downloaded multilingual (or the registry default
       // if none). Language-specific entries aren't candidates here —
       // they're picked via per-language overrides.
+      const currentCfg = transcribeConfigRef.current;
       if (
-        transcribeConfig.default.provider === "local" &&
-        transcribeConfig.default.model_id === modelId
+        currentCfg.default.provider === "local" &&
+        currentCfg.default.model_id === modelId
       ) {
         const fallback =
           models.find((m) => m.kind === "multilingual" && m.downloaded)?.id ??
           "large-v3-turbo-q5";
         await setDefaultConfig({
-          ...transcribeConfig.default,
+          ...currentCfg.default,
           model_id: fallback,
         });
       }
@@ -405,6 +448,7 @@ export function useSettings() {
   }
 
   async function updateTranscribeConfig(cfg: TranscribeConfig) {
+    transcribeConfigRef.current = cfg;
     setTranscribeConfig(cfg);
     try {
       await ipc.setTranscribeConfig(cfg);
@@ -416,24 +460,33 @@ export function useSettings() {
   // Convenience for the Default provider section. Only mutates the
   // `default` slot; per-language overrides untouched.
   async function setDefaultConfig(cfg: ProviderConfig) {
-    await updateTranscribeConfig({ ...transcribeConfig, default: cfg });
+    await updateTranscribeConfig({ ...transcribeConfigRef.current, default: cfg });
   }
 
   // Add or replace a per-language override.
   async function setLanguageOverride(language: string, cfg: ProviderConfig) {
+    const current = transcribeConfigRef.current;
     await updateTranscribeConfig({
-      ...transcribeConfig,
-      per_language: { ...transcribeConfig.per_language, [language]: cfg },
+      ...current,
+      per_language: { ...current.per_language, [language]: cfg },
     });
+    if (
+      local.flash?.kind === "suggest_language_override" &&
+      local.flash.language === language
+    ) {
+      const langLabel = LANGUAGES.find((l) => l.value === language)?.label ?? language;
+      flashLocal({ kind: "info", message: `Added ${langLabel} override.` });
+    }
   }
 
   // Remove a per-language override entirely. No-op if the language
   // isn't currently mapped.
   async function removeLanguageOverride(language: string) {
-    if (!(language in transcribeConfig.per_language)) return;
-    const next = { ...transcribeConfig.per_language };
+    const current = transcribeConfigRef.current;
+    if (!(language in current.per_language)) return;
+    const next = { ...current.per_language };
     delete next[language];
-    await updateTranscribeConfig({ ...transcribeConfig, per_language: next });
+    await updateTranscribeConfig({ ...current, per_language: next });
   }
 
   // Provider API keys moved out of this hook entirely: ProviderKeyCard

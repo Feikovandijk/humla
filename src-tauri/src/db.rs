@@ -3041,7 +3041,9 @@ pub fn migrate_transcribe_config(conn: &Connection) -> Result<()> {
                 _ => None,
             });
         let cfg = crate::stt::from_legacy_settings(
-            provider.as_deref(),
+            provider
+                .as_deref()
+                .or(if model.is_none() { Some("local") } else { None }),
             model.as_deref(),
             whisper_model.as_deref(),
             whisper_preset.as_deref(),
@@ -3934,7 +3936,7 @@ mod tests {
     #[test]
     fn migrate_transcribe_config_fresh_install_writes_default() {
         // Fresh install: no transcribe_config, no legacy keys at all.
-        // Migration synthesises an OpenAI/whisper-1 default and marks
+        // Migration synthesises the local Whisper default and marks
         // the flag so subsequent launches no-op.
         let conn = settings_only_conn();
         migrate_transcribe_config(&conn).unwrap();
@@ -3950,11 +3952,12 @@ mod tests {
             serde_json::from_str(&get_setting(&conn, "transcribe_config").unwrap().unwrap())
                 .unwrap();
         match cfg {
-            crate::stt::ProviderConfig::OpenAi(c) => {
-                assert_eq!(c.model, "whisper-1");
-                assert_eq!(c.base_url, None);
+            crate::stt::ProviderConfig::Local(c) => {
+                assert_eq!(c.model_id, "large-v3-turbo-q5");
+                assert_eq!(c.preset, "quality");
+                assert!(c.use_gpu);
             }
-            _ => panic!("expected OpenAi default"),
+            _ => panic!("expected Local default"),
         }
     }
 

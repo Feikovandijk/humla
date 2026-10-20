@@ -11,6 +11,24 @@ export type Release = {
 
 export const releases: Release[] = [
   {
+    version: "0.70.0",
+    date: "2026-10-20",
+    title: "Local models, simpler settings",
+    summary: "Settings now offer models that run on your Mac, and Humla updates itself from this build's own releases.",
+    paragraphs: [
+      "Settings → Transcription is now one list of Whisper models that run on your Mac. Each shows what it is good at and how big it is, and you can download, delete or make it the default in place. Summaries and Chat use your local model server. If you had picked a cloud provider before, Humla switches it to local the first time you open Settings.",
+      "Recordings are now in English or Dutch, and new notes start in English.",
+      "Humla now checks for updates from this build's own releases. If you installed Humla from another download, install this version by hand once. After that it updates itself.",
+    ],
+    highlights: [
+      "Pick, download and delete on-device Whisper models from one list.",
+      "Summaries and Chat use your local model server.",
+      "Recordings are in English or Dutch.",
+      "Updates come from this build's own releases.",
+    ],
+    issues: [],
+  },
+  {
     version: "0.69.1",
     date: "2026-10-18",
     title: "Humla opens again",

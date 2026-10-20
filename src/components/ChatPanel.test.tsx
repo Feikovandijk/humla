@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -7,6 +7,14 @@ import { mockTauri } from "../test/tauri";
 import type { ChatMessageDto, Folder, Note } from "../lib/ipc";
 import { useCloudStore, DISCONNECTED, type CloudRole } from "../lib/cloud";
 import { useNotesStore } from "../lib/store";
+
+// These tests exercise the panel on a cloud provider, the app default before
+// chat went local-only; keep it as the default from the first render so the
+// key read starts at mount, as it did then.
+vi.mock("../pages/settings/types", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../pages/settings/types")>();
+  return { ...mod, DEFAULTS: { ...mod.DEFAULTS, chat_provider: "openai" } };
+});
 
 // Signed into a MANAGED (billing-enabled) workspace with the given role, so the
 // BYOK activation pane (#76) applies. The roster's owner is "Ada" for
