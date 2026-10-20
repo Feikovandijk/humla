@@ -108,7 +108,9 @@ export function useChatReadiness() {
 
   let ready = false;
   let hint = "";
-  if (loading) {
+  // A cloud key read still in flight would otherwise flash "add your key".
+  const keyPending = !isOllama && !(isAnthropic ? anthropicKey : key).loaded;
+  if (loading || keyPending) {
     hint = "";
   } else if (isOllama) {
     hint = localChatHint({ reachable, installed, model, baseUrl, where: "settings" });
@@ -124,5 +126,5 @@ export function useChatReadiness() {
     ready = hint === "";
   }
 
-  return { loading, ready, hint, provider, model, baseUrl };
+  return { loading: loading || keyPending, ready, hint, provider, model, baseUrl };
 }

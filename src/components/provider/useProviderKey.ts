@@ -14,6 +14,9 @@ export function useProviderKey(
   { enabled = true }: { enabled?: boolean } = {},
 ) {
   const [hasKey, setHasKey] = useState(false);
+  // Whether the Keychain read has answered; `loaded` below also counts a
+  // skipped read, derived at render so enabling it never reads as done.
+  const [readDone, setReadDone] = useState(false);
   const [draft, setDraft] = useState("");
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<
@@ -29,13 +32,18 @@ export function useProviderKey(
     setDraft("");
     setResult(null);
     setHasKey(false);
+    setReadDone(false);
     if (!enabled) return;
     ipc
       .getProviderKey(provider)
       .then((v) => {
-        if (!cancelled) setHasKey(v !== null);
+        if (cancelled) return;
+        setHasKey(v !== null);
+        setReadDone(true);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) setReadDone(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -77,5 +85,5 @@ export function useProviderKey(
     }
   }
 
-  return { hasKey, draft, setDraft, testing, result, save, test };
+  return { hasKey, loaded: !enabled || readDone, draft, setDraft, testing, result, save, test };
 }
