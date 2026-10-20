@@ -76,8 +76,9 @@ On a fresh clone `src-tauri/binaries/` doesn't exist. `tauri-build` fails when a
 
 ## Git and pull requests
 
-- This checkout is the fork `Feikovandijk/humla` (`origin`). **Open every PR against the fork's `main`** (`gh pr create --repo Feikovandijk/humla --base main`). Never open one against the upstream `michaelwilhelmsen/humla`.
-- Branch off `main`; don't commit to it directly.
+- This checkout is the fork `Feikovandijk/humla` (`origin`). **Open every PR against the fork's `dev`** (`gh pr create --repo Feikovandijk/humla --base dev`). `main` is for releases only. Never open a PR against the upstream `michaelwilhelmsen/humla`.
+- Branch off `dev`; don't commit to `dev` or `main` directly.
+- Never put sensitive data in a PR (title, body, commits or diff): no API keys, tokens, credentials, signing or notarisation details, personal data, or meeting content.
 
 ## Rules that are easy to break
 
