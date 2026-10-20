@@ -93,7 +93,7 @@ export const TITLE_MIN_BODY_CHARS = 160;
  *
  * - a capture in flight, so no model call is ever made during a recording;
  * - a note that has a transcript, whose title is the post-stop chain's to write;
- * - a title that isn't ours, and a note the user can't edit anyway.
+ * - a title that isn't ours.
  *
  * The backend re-checks eligibility before spending anything, so this is about
  * not making a pointless IPC call, not about correctness.
@@ -103,9 +103,8 @@ export function shouldRequestTitleForBody(input: {
   bodyText: string;
   hasTranscript: boolean;
   recording: boolean;
-  readOnly: boolean;
 }): boolean {
-  if (input.readOnly || input.recording || input.hasTranscript) return false;
+  if (input.recording || input.hasTranscript) return false;
   if (!isReplaceableTitle(input.title)) return false;
   return input.bodyText.trim().length >= TITLE_MIN_BODY_CHARS;
 }

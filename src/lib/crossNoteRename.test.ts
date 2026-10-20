@@ -4,7 +4,6 @@ import {
   renameOutcomeMessage,
   renameSpeakerAcrossNotes,
   isPerRecordingLabel,
-  notesIRecorded,
 } from "./crossNoteRename";
 import { makeNote } from "../test/fixtures";
 
@@ -55,7 +54,6 @@ describe("renameSpeakerAcrossNotes", () => {
     return {
       updateNote: vi.fn().mockResolvedValue(undefined),
       noteTimelineRename: vi.fn().mockResolvedValue(undefined),
-      uploadNoteSessions: vi.fn().mockResolvedValue(undefined),
       reindexNote: vi.fn().mockResolvedValue(undefined),
       onRewritten: vi.fn(),
     };
@@ -79,7 +77,7 @@ describe("renameSpeakerAcrossNotes", () => {
     });
   });
 
-  it("renames the timeline too, and re-uploads and reindexes each note", async () => {
+  it("renames the timeline too, and reindexes each note", async () => {
     const d = deps();
     await renameSpeakerAcrossNotes({
       notes: [note("a", "You: hi")],
@@ -91,7 +89,6 @@ describe("renameSpeakerAcrossNotes", () => {
     // The same chain a single-note rename takes, so the sync ping and the
     // retrieval index stay correct rather than being reimplemented here.
     expect(d.noteTimelineRename).toHaveBeenCalledWith("a", "You", "Michael");
-    expect(d.uploadNoteSessions).toHaveBeenCalledWith("a");
     expect(d.reindexNote).toHaveBeenCalledWith("a");
   });
 
@@ -181,9 +178,8 @@ describe("renameSpeakerAcrossNotes", () => {
       ...d,
     });
 
-    // Sharing one try meant a failed timeline rename also skipped these, so the
+    // Sharing one try meant a failed timeline rename also skipped this, so the
     // note dropped out of retrieval freshness while the toast said "renamed".
-    expect(d.uploadNoteSessions).toHaveBeenCalledWith("a");
     expect(d.reindexNote).toHaveBeenCalledWith("a");
   });
 
@@ -241,28 +237,3 @@ describe("isPerRecordingLabel", () => {
   });
 });
 
-describe("notesIRecorded", () => {
-  it("keeps only notes I own", () => {
-    const notes = [
-      makeNote({ id: "mine", owner: "u_me" }),
-      makeNote({ id: "kurts", owner: "u_kurt" }),
-    ];
-    expect(notesIRecorded(notes, "u_me").map((n) => n.id)).toEqual(["mine"]);
-  });
-
-  it("counts an unowned note as mine — local and Personal notes have no owner", () => {
-    const notes = [makeNote({ id: "local", owner: "" })];
-    expect(notesIRecorded(notes, "u_me").map((n) => n.id)).toEqual(["local"]);
-  });
-
-  it("is every note when signed out, where there are no other authors", () => {
-    const notes = [makeNote({ id: "a", owner: "" }), makeNote({ id: "b", owner: "" })];
-    expect(notesIRecorded(notes, undefined)).toHaveLength(2);
-  });
-
-  it("never claims a teammate's note when signed out but notes carry owners", () => {
-    // A stale store from a previous session must not widen the sweep.
-    const notes = [makeNote({ id: "kurts", owner: "u_kurt" })];
-    expect(notesIRecorded(notes, undefined)).toEqual([]);
-  });
-});

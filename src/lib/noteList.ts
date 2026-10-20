@@ -159,8 +159,6 @@ export type NoteFilter = {
   client: string | null;
   /** Only ever [`UNASSIGNED`] — the notes filed nowhere. */
   folder: string | null;
-  /** A workspace member's user id. Meaningless outside a workspace. */
-  owner: string | null;
 };
 
 // Client ids are uuids, so no real id can collide with this. Not `__none__` —
@@ -168,7 +166,7 @@ export type NoteFilter = {
 // item carrying it comes back out of the picker as null.
 export const UNASSIGNED = "__unassigned__";
 
-export const NO_FILTER: NoteFilter = { state: null, client: null, folder: null, owner: null };
+export const NO_FILTER: NoteFilter = { state: null, client: null, folder: null };
 
 export function filterActive(f: NoteFilter): boolean {
   return Object.values(f).some((v) => v !== null);
@@ -178,8 +176,6 @@ export function filterActive(f: NoteFilter): boolean {
 export type FilterContext = {
   /** This note holds at least one recording session. */
   recorded?: boolean;
-  /** The signed-in user's id, for the owner axis. */
-  myId?: string | null;
 };
 
 export function matchesFilter(n: Note, f: NoteFilter, ctx: FilterContext = {}): boolean {
@@ -188,13 +184,6 @@ export function matchesFilter(n: Note, f: NoteFilter, ctx: FilterContext = {}): 
     if (f.client === UNASSIGNED ? !!n.client_id : n.client_id !== f.client) return false;
   }
   if (f.folder === UNASSIGNED && n.folder_id) return false;
-  if (f.owner !== null) {
-    // A note recorded on this device before it ever synced carries no owner.
-    // It is still the signed-in user's, so "Me" has to claim it — otherwise
-    // the filter hides your own newest meetings.
-    const mine = ctx.myId != null && f.owner === ctx.myId;
-    if (!(n.owner === f.owner || (mine && !n.owner))) return false;
-  }
   return true;
 }
 

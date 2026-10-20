@@ -630,46 +630,6 @@ pub struct ChatSendResult {
     truncated: bool,
 }
 
-/// The loaded chat context (issue #58): Personal (on-device) or one specific
-/// workspace (Teams/cloud). This type is the SINGLE owner of the "active
-/// workspace, else Personal" rule — every chat command derives its context via
-/// `ChatContext::load` instead of re-checking `active_workspace` emptiness
-/// itself. There is no user-chosen tenant; it follows the sidebar workspace.
-enum ChatContext {
-    Personal,
-    Workspace(String),
-}
-
-impl ChatContext {
-    /// Derive the context from the active workspace setting — the one place the
-    /// rule lives.
-    fn load(conn: &rusqlite::Connection) -> Self {
-        let workspace = super::cloud::active_workspace(conn);
-        if workspace.is_empty() {
-            ChatContext::Personal
-        } else {
-            ChatContext::Workspace(workspace)
-        }
-    }
-
-    /// The `conversations.tenant` string for this context.
-    fn tenant(&self) -> &str {
-        match self {
-            ChatContext::Personal => CHAT_TENANT_PERSONAL,
-            ChatContext::Workspace(id) => id,
-        }
-    }
-
-    /// The workspace id when this is a workspace context, else None. Presence of
-    /// a workspace is what routes a turn to the cloud (Teams) path.
-    fn workspace(&self) -> Option<&str> {
-        match self {
-            ChatContext::Personal => None,
-            ChatContext::Workspace(id) => Some(id),
-        }
-    }
-}
-
 // ── Chat sessions (issue #61) ───────────────────────────────────────────────
 // Multiple conversations ("sessions") per Note. The active session is the most-
 // recently-updated one; an explicit command creates a fresh one. Sessions can be
@@ -677,19 +637,10 @@ impl ChatContext {
 // `chat_rename_conversation`).
 
 /// The longest title we store on a rename (issue #109).
-///
-/// Pinned to the cap in `chat_sessions.pb.js`'s create + rename routes: if this
-/// were larger, a workspace rename would silently come back shortened, and the
-/// local row and the server record would disagree about the thread's name. Much
-/// longer than [`chat::TITLE_MAX_CHARS`] (40) on purpose — that bounds what we
-/// *derive* from a first message, where this bounds what a user may deliberately
-/// type.
 const TITLE_MAX_STORED_CHARS: usize = 300;
 
-/// One row in the session list. `id` is always the LOCAL conversation id (for a
-/// workspace session that's the handle row, its `remote_id` mapping to the
-/// server record), so `chat_history` / `chat_send` / breadth all key on the
-/// same id across tenants. `title` is resolved (stored title, else a date
+/// One row in the session list. `id` is the local conversation id, which
+/// `chat_history` / `chat_send` / breadth all key on. `title` is resolved (stored title, else a date
 /// fallback) so a not-yet-titled session still shows something.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -697,9 +648,6 @@ pub struct ConversationMeta {
     id: String,
     title: String,
     breadth: String,
-    /// The pinned authorship filter's user id, or "" for none (#103). The chip
-    /// resolves it to a name against the workspace roster.
-    owner_filter: String,
     /// The pinned Client's id, or "" for none. The token resolves it to a name
     /// against the Client list.
     client_filter: String,
@@ -735,7 +683,7 @@ fn resolved_title_is_unset(c: &db::Conversation) -> bool {
     c.title.as_deref().map_or(true, |t| t.trim().is_empty())
 }
 
-/// Build a session-list entry for a local (personal or workspace-handle) row.
+/// Build a session-list entry for a local row.
 fn conversation_meta(
     conn: &rusqlite::Connection,
     c: &db::Conversation,
@@ -746,7 +694,6 @@ fn conversation_meta(
         id: c.id.clone(),
         title: resolved_title(c),
         breadth: c.breadth.clone(),
-        owner_filter: c.owner_filter.clone(),
         client_filter: c.client_filter.clone(),
         speaker_filter: c.speaker_filter.clone(),
         updated_at: c.updated_at,
@@ -843,7 +790,7 @@ fn list_filter_for(target: &ChatTarget) -> db::ListFilter {
 
 /// Resolve the session a READ command targets, honouring the resume rule (#120).
 ///
-/// Shared by `chat_history`, `chat_get_breadth` and `chat_get_owner_filter` so all
+/// Shared by `chat_history`, `chat_get_breadth` and `chat_get_pin` so all
 /// three agree about what a bare request means. An explicit id always wins — a
 /// thread picked from the sidebar must open — but a bare request on a drafting
 /// target resolves to nothing rather than to whatever was newest.
@@ -879,43 +826,6 @@ fn resolve_for_write(
     Ok(Some(resolve_or_create(conn, tenant, target, explicit, DraftSettings::default())?))
 }
 
-/// The three conversation-level retrieval pins, as one value.
-///
-/// They are written, mirrored, carried per turn and reported to the client
-/// together, so passing them as three loose strings meant every signature that
-/// touched one touched all three — and a transposed pair of same-typed arguments
-/// would have compiled.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConversationPins {
-    /// A PB user id, or "" for off.
-    pub owner: String,
-    /// A Client id, or "" for off.
-    pub client: String,
-    /// A transcript label, or "" for off. Not an id, and never will be (ADR-0002).
-    pub speaker: String,
-}
-
-impl ConversationPins {
-    fn of(c: &db::Conversation) -> Self {
-        Self {
-            owner: c.owner_filter.clone(),
-            client: c.client_filter.clone(),
-            speaker: c.speaker_filter.clone(),
-        }
-    }
-}
-
-/// The same three pins as they arrive from the server: `None` is "the row does
-/// not carry this field" (an older server), which is not the same as "" and must
-/// not stamp an empty pin over an inherited one.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct ServerPins<'a> {
-    pub owner: Option<&'a str>,
-    pub client: Option<&'a str>,
-    pub speaker: Option<&'a str>,
-}
-
 /// A pin value as an optional: empty (and blank) is "no pin", never a pin on
 /// nothing. The one owner of that normalisation, so no read path depends on a
 /// setter having refused the blank first.
@@ -936,9 +846,6 @@ fn non_empty(s: &str) -> Option<String> {
 #[derive(Debug, Default, Clone)]
 pub struct DraftSettings {
     pub breadth: Option<String>,
-    pub owner_filter: Option<String>,
-    /// The other two pins, carried the same way: a drafting pane holds them
-    /// until the first turn materialises the row.
     pub client_filter: Option<String>,
     pub speaker_filter: Option<String>,
 }
@@ -977,15 +884,12 @@ fn check_pinned_breadth(target: &ChatTarget, breadth: &str) -> Result<(), String
 /// setters enforce (issue #120).
 ///
 /// `chat_set_breadth` rejects a value outside the vocabulary and a non-`all`
-/// breadth on a library-wide target; `chat_set_owner_filter` rejects a pin in
-/// Personal, where every note is the caller's own already. `DraftSettings` writes
-/// the same two columns, so it answers to the same rules — a chip that can't
+/// breadth on a library-wide target. `DraftSettings` writes the same columns as
+/// the setters, so it answers to the same rules — a chip that can't
 /// produce an illegal value today is not a reason for the command to accept one.
 fn validated_draft(
-    state: &State<'_, AppState>,
     target: &ChatTarget,
     breadth: Option<String>,
-    owner_filter: Option<String>,
     client_filter: Option<String>,
     speaker_filter: Option<String>,
 ) -> Result<DraftSettings, String> {
@@ -993,25 +897,8 @@ fn validated_draft(
         chat::validate_breadth(b)?;
         check_pinned_breadth(target, b)?;
     }
-    // An empty string is "no pin", not a pin on nobody — normalise it away rather
-    // than storing it, so the created row reads the same as one that never had one.
-    let owner_filter = owner_filter.as_deref().and_then(non_empty);
-    if owner_filter.is_some() {
-        let personal = {
-            let conn = state.db.lock();
-            matches!(ChatContext::load(&conn), ChatContext::Personal)
-        };
-        if personal {
-            return Err(
-                "Filtering by author needs a workspace — in Personal every note is yours.".into()
-            );
-        }
-    }
-    // No context check for these two: unlike authorship, a Client and a speaker
-    // both exist in Personal, which is why they clamp local retrieval.
     Ok(DraftSettings {
         breadth,
-        owner_filter,
         client_filter: client_filter.as_deref().and_then(non_empty),
         speaker_filter: speaker_filter.as_deref().and_then(non_empty),
     })
@@ -1055,24 +942,7 @@ fn resolve_or_create(
             .ok_or_else(|| "conversation vanished after insert".to_string())
     };
     let pinned = draft.client_filter.is_some() || draft.speaker_filter.is_some();
-    match draft.owner_filter.as_deref().map(str::trim) {
-        // Blank is "no pin", checked here as well as in `validated_draft`: this is
-        // the layer that writes, and it shouldn't depend on a validator having run
-        // first. A stored "   " would be a pin on nobody — a third state retrieval
-        // would then need an opinion about.
-        //
-        // Written as a second statement rather than a wider INSERT: the pin is
-        // rare, and `create_conversation` is on every path that makes a row.
-        Some(owner) if !owner.is_empty() => {
-            db::set_conversation_owner_filter(conn, &conv.id, Some(owner))
-                .map_err(|e| e.to_string())?;
-            reread(conn)
-        }
-        // A row that got either pin is re-read, or the handle would carry the
-        // pre-pin values.
-        _ if pinned => reread(conn),
-        _ => Ok(conv),
-    }
+    if pinned { reread(conn) } else { Ok(conv) }
 }
 
 /// Resolve the "new session" for a target in the personal scope (issue #61),
@@ -1103,8 +973,7 @@ fn new_personal_conversation(
 }
 
 /// List a Note's chat sessions, most-recently-updated first (issue #61).
-/// Personal reads local SQLite; a workspace reads the server-authoritative list
-/// (see [`list_conversations_cloud`]). Opening/listing creates nothing.
+/// Opening/listing creates nothing.
 #[tauri::command]
 pub async fn chat_list_conversations(
     app: AppHandle,
@@ -1116,29 +985,17 @@ pub async fn chat_list_conversations(
     let target = ChatTarget::from_ids(note_id, folder_id)?;
     let page = conversation_page(limit, offset);
     let state: State<AppState> = app.state();
-    let ctx = {
-        let conn = state.db.lock();
-        ChatContext::load(&conn)
-    };
-    match ctx.workspace() {
-        None => {
-            let conn = state.db.lock();
-            let convs = db::list_conversations(
-                &conn,
-                CHAT_TENANT_PERSONAL,
-                target.scope(),
-                target.scope_id(),
-                page,
-                list_filter_for(&target),
-            )
-            .map_err(|e| e.to_string())?;
-            convs.iter().map(|c| conversation_meta(&conn, c)).collect()
-        }
-        Some(ws) => {
-            let all = list_conversations_cloud(&state, ws, &target).await?;
-            Ok(apply_page(all, page))
-        }
-    }
+    let conn = state.db.lock();
+    let convs = db::list_conversations(
+        &conn,
+        CHAT_TENANT_PERSONAL,
+        target.scope(),
+        target.scope_id(),
+        page,
+        list_filter_for(&target),
+    )
+    .map_err(|e| e.to_string())?;
+    convs.iter().map(|c| conversation_meta(&conn, c)).collect()
 }
 
 /// The requested window, or None for "everything" (issue #95).
@@ -1152,22 +1009,8 @@ fn conversation_page(limit: Option<u32>, offset: Option<u32>) -> Option<db::Page
     limit.map(|limit| db::Page { limit: limit.into(), offset: offset.unwrap_or(0).into() })
 }
 
-/// Apply a window to an already-materialised list.
-///
-/// The Personal path pages in SQL; a workspace can't yet, because the server's
-/// list route takes no paging parameters and hard-caps at 200 rows
-/// (`chat_sessions.pb.js`). So the workspace list is fetched whole and windowed
-/// here: the UI stays lazy and the DOM stays small, but the request doesn't
-/// shrink and a workspace past 200 conversations would silently lose the tail.
-/// Real server paging is tracked separately — see humla-cloud#33.
-fn apply_page<T>(all: Vec<T>, page: Option<db::Page>) -> Vec<T> {
-    let Some(page) = page else { return all };
-    all.into_iter().skip(page.offset as usize).take(page.limit as usize).collect()
-}
-
-/// Create a fresh chat session for a target (issue #61). Personal creates a local
-/// row (with the no-op guard reusing an empty most-recent session); a workspace
-/// delegates to the server (see [`new_conversation_cloud`]).
+/// Create a fresh chat session for a target (issue #61): a local row, with the
+/// no-op guard reusing an empty most-recent session.
 #[tauri::command]
 pub async fn chat_new_conversation(
     app: AppHandle,
@@ -1176,18 +1019,9 @@ pub async fn chat_new_conversation(
 ) -> Result<ConversationMeta, String> {
     let target = ChatTarget::from_ids(note_id, folder_id)?;
     let state: State<AppState> = app.state();
-    let ctx = {
-        let conn = state.db.lock();
-        ChatContext::load(&conn)
-    };
-    match ctx.workspace() {
-        None => {
-            let conn = state.db.lock();
-            let conv = new_personal_conversation(&conn, &target)?;
-            conversation_meta(&conn, &conv)
-        }
-        Some(ws) => new_conversation_cloud(&state, ws, &target).await,
-    }
+    let conn = state.db.lock();
+    let conv = new_personal_conversation(&conn, &target)?;
+    conversation_meta(&conn, &conv)
 }
 
 /// Delete a conversation and its messages (issue #109).
@@ -1197,14 +1031,6 @@ pub async fn chat_new_conversation(
 /// which is a helpful default for reading and an unacceptable one for destroying:
 /// a caller that forgot to pass an id would silently take out whatever thread
 /// happened to be newest.
-///
-/// **Both sides or neither.** A workspace conversation is server-authoritative,
-/// but the local handle is what `list_conversations_cloud`'s pre-#19 union falls
-/// back to — so dropping only the remote record leaves a handle that the very
-/// next list puts back on screen. The remote delete therefore goes FIRST and its
-/// failure aborts: a local row with a live server record is a stale cache the
-/// next list corrects, where a deleted server record with a surviving handle is a
-/// row that reappears with no way to remove it.
 #[tauri::command]
 pub async fn chat_delete_conversation(
     app: AppHandle,
@@ -1214,35 +1040,17 @@ pub async fn chat_delete_conversation(
 ) -> Result<(), String> {
     let target = ChatTarget::from_ids(note_id, folder_id)?;
     let state: State<AppState> = app.state();
-    let ctx = {
-        let conn = state.db.lock();
-        ChatContext::load(&conn)
-    };
-
     // Resolve within the caller's tenant + target first, so a stray id can't
     // reach another note's or another tenant's thread.
     let conv = {
         let conn = state.db.lock();
-        resolve_existing(&conn, ctx.tenant(), &target, Some(&conversation_id))?
+        resolve_existing(&conn, CHAT_TENANT_PERSONAL, &target, Some(&conversation_id))?
     };
     let Some(conv) = conv else {
         // Nothing local to remove. Idempotent by intent: the UI drops the row
         // optimistically, so a retry after a partial failure must still succeed.
         return Ok(());
     };
-
-    // No remote id → the thread never reached the server (created, never sent to).
-    // The local handle is the whole of it, so dropping it below is complete.
-    if let (Some(workspace), Some(remote_id)) = (ctx.workspace(), conv.remote_id.as_deref()) {
-        let workspace = workspace.to_string();
-        super::cloud::cloud_delete_json(
-            &state,
-            &format!("/api/humla/chat/conversations/{remote_id}"),
-            &[("workspace_id", workspace.as_str())],
-        )
-        .await
-        .map_err(|e| e.message(chat::cloud::cloud_chat_error_message))?;
-    }
 
     let conn = state.db.lock();
     db::delete_conversation(&conn, &conv.id).map_err(|e| e.to_string())
@@ -1251,12 +1059,9 @@ pub async fn chat_delete_conversation(
 /// Rename a conversation (issue #109) — the user's override of the title derived
 /// from the first turn.
 ///
-/// Remote first, for the same reason as the delete above: a local title the
-/// server never accepted would be silently reverted the next time the workspace
-/// list is read, and a rename that looks applied but isn't is worse than one that
-/// reports failure. Rejects an all-whitespace title, because an empty title is
-/// how both sides spell "never titled" — storing one would re-arm the send path's
-/// derivation and let the next turn overwrite the user's choice.
+/// Rejects an all-whitespace title, because an empty title is how "never titled"
+/// is spelled — storing one would re-arm the send path's derivation and let the
+/// next turn overwrite the user's choice.
 #[tauri::command]
 pub async fn chat_rename_conversation(
     app: AppHandle,
@@ -1267,39 +1072,20 @@ pub async fn chat_rename_conversation(
 ) -> Result<ConversationMeta, String> {
     let target = ChatTarget::from_ids(note_id, folder_id)?;
     let state: State<AppState> = app.state();
-    let ctx = {
-        let conn = state.db.lock();
-        ChatContext::load(&conn)
-    };
-
     let trimmed = title.trim();
     if trimmed.is_empty() {
         return Err("A conversation needs a name.".into());
     }
-    // Same cap the server applies, so a title written here can't be silently
-    // truncated to a different value there. Sliced on a char boundary.
+    // Sliced on a char boundary.
     let capped: String = trimmed.chars().take(TITLE_MAX_STORED_CHARS).collect();
 
     let conv = {
         let conn = state.db.lock();
-        resolve_existing(&conn, ctx.tenant(), &target, Some(&conversation_id))?
+        resolve_existing(&conn, CHAT_TENANT_PERSONAL, &target, Some(&conversation_id))?
     };
     let Some(conv) = conv else {
         return Err("That conversation no longer exists.".into());
     };
-
-    // No remote id yet: the local title rides up with the first turn's persist,
-    // which carries the conversation's title alongside its messages.
-    if let (Some(workspace), Some(remote_id)) = (ctx.workspace(), conv.remote_id.as_deref()) {
-        let body = serde_json::json!({ "workspace_id": workspace, "title": capped });
-        super::cloud::cloud_patch_json(
-            &state,
-            &format!("/api/humla/chat/conversations/{remote_id}"),
-            &body,
-        )
-        .await
-        .map_err(|e| e.message(chat::cloud::cloud_chat_error_message))?;
-    }
 
     let conn = state.db.lock();
     db::rename_conversation(&conn, &conv.id, &capped).map_err(|e| e.to_string())?;
@@ -1331,57 +1117,15 @@ pub fn chat_set_breadth(
     check_pinned_breadth(&target, &breadth)?;
     let state: State<AppState> = app.state();
     let conn = state.db.lock();
-    let ctx = ChatContext::load(&conn);
     // A draft has nowhere to store this yet, and must not grow a row to hold it
     // (#120): the pane keeps the value and the first turn carries it in via
     // `DraftSettings`. Writing here would create a row the list hides but the next
     // send resolves to — the stale-setting trap this replaced.
-    let Some(conversation) = resolve_for_write(&conn, ctx.tenant(), &target, conversation_id.as_deref())?
+    let Some(conversation) = resolve_for_write(&conn, CHAT_TENANT_PERSONAL, &target, conversation_id.as_deref())?
     else {
         return Ok(());
     };
     db::set_conversation_breadth(&conn, &conversation.id, &breadth).map_err(|e| e.to_string())
-}
-
-/// Pin (or clear) the conversation's authorship filter (#103) — the user whose
-/// notes it retrieves from.
-///
-/// A user id, not a flag, because a workspace's conversation list is visible to
-/// every member: a boolean would mean different notes to different readers of the
-/// same thread. Storing the person keeps one meaning per conversation.
-///
-/// `owner` is `None` to clear. The UI only ever offers the caller's own id, and
-/// only when the filter is off or already pinned to them — but that gate is not
-/// enforced here, matching `chat_set_breadth`, which likewise lets any member
-/// change a shared conversation's retrieval settings.
-#[tauri::command]
-pub fn chat_set_owner_filter(
-    app: AppHandle,
-    note_id: Option<String>,
-    folder_id: Option<String>,
-    conversation_id: Option<String>,
-    owner: Option<String>,
-) -> Result<(), String> {
-    let target = ChatTarget::from_ids(note_id, folder_id)?;
-    let owner = owner.as_deref().and_then(non_empty);
-    let state: State<AppState> = app.state();
-    let conn = state.db.lock();
-    let ctx = ChatContext::load(&conn);
-    if matches!(ctx, ChatContext::Personal) && owner.is_some() {
-        // In Personal every note is the user's own, so a filter could only ever be
-        // the identity function or a mistake. The control isn't rendered there;
-        // reject rather than store a pin nothing would honour.
-        return Err("Filtering by author needs a workspace — in Personal every note is yours.".into());
-    }
-    // Same as breadth: a draft carries its pin in the pane until the first turn
-    // creates the row (#120). Especially important here — an invisible row holding
-    // a pin is what let the chip read "off" while the turn narrowed anyway.
-    let Some(conversation) = resolve_for_write(&conn, ctx.tenant(), &target, conversation_id.as_deref())?
-    else {
-        return Ok(());
-    };
-    db::set_conversation_owner_filter(&conn, &conversation.id, owner.as_deref())
-        .map_err(|e| e.to_string())
 }
 
 /// Which pin a `chat_set_pin` / `chat_get_pin` call is about.
@@ -1398,9 +1142,6 @@ pub enum PinKind {
 
 /// Pin (or clear) the conversation's Client or speaker filter.
 ///
-/// Unlike `chat_set_owner_filter` these are allowed in Personal: a Personal
-/// library has Clients and speakers, and the local path applies both.
-///
 /// A draft holds its pin in the pane until the first turn creates the row (#120),
 /// which is why a missing conversation returns early rather than creating one.
 #[tauri::command]
@@ -1416,9 +1157,8 @@ pub fn chat_set_pin(
     let value = value.as_deref().and_then(non_empty);
     let state: State<AppState> = app.state();
     let conn = state.db.lock();
-    let ctx = ChatContext::load(&conn);
     let Some(conversation) =
-        resolve_for_write(&conn, ctx.tenant(), &target, conversation_id.as_deref())?
+        resolve_for_write(&conn, CHAT_TENANT_PERSONAL, &target, conversation_id.as_deref())?
     else {
         return Ok(());
     };
@@ -1442,9 +1182,8 @@ pub fn chat_get_pin(
     let target = ChatTarget::from_ids(note_id, folder_id)?;
     let state: State<AppState> = app.state();
     let conn = state.db.lock();
-    let ctx = ChatContext::load(&conn);
     Ok(
-        resolve_for_read(&conn, ctx.tenant(), &target, conversation_id.as_deref())?
+        resolve_for_read(&conn, CHAT_TENANT_PERSONAL, &target, conversation_id.as_deref())?
             .map(|c| match kind {
                 PinKind::Client => c.client_filter,
                 PinKind::Speaker => c.speaker_filter,
@@ -1471,9 +1210,8 @@ pub fn chat_get_breadth(
     let target = ChatTarget::from_ids(note_id, folder_id)?;
     let state: State<AppState> = app.state();
     let conn = state.db.lock();
-    let ctx = ChatContext::load(&conn);
     let Some(conversation) =
-        resolve_for_read(&conn, ctx.tenant(), &target, conversation_id.as_deref())?
+        resolve_for_read(&conn, CHAT_TENANT_PERSONAL, &target, conversation_id.as_deref())?
     else {
         // No session yet → report the target's own default WITHOUT creating a row,
         // which is also what `inherited_breadth` would return here (its
@@ -1486,59 +1224,6 @@ pub fn chat_get_breadth(
     effective_breadth(&conn, &conversation.id, &conversation.breadth, &target, note.as_ref())
 }
 
-/// Read the persisted authorship pin (#103) so the chip initialises from the
-/// backend in one round trip, exactly as the Scope chip does. `""` = off.
-///
-/// No session yet → off, WITHOUT creating a row: unlike breadth there is no
-/// default to inherit, since a pin is only ever something the user set.
-#[tauri::command]
-pub fn chat_get_owner_filter(
-    app: AppHandle,
-    note_id: Option<String>,
-    folder_id: Option<String>,
-    conversation_id: Option<String>,
-) -> Result<String, String> {
-    let target = ChatTarget::from_ids(note_id, folder_id)?;
-    let state: State<AppState> = app.state();
-    let conn = state.db.lock();
-    let ctx = ChatContext::load(&conn);
-    Ok(
-        resolve_for_read(&conn, ctx.tenant(), &target, conversation_id.as_deref())?
-            .map(|c| c.owner_filter)
-            .unwrap_or_default(),
-    )
-}
-
-/// Workspace turn-allowance for the composer meter (issue #69). Personal chat is
-/// unmetered by design → `None` with no HTTP. In a workspace, GET the chat
-/// service's usage endpoint (same base/token/one-shot-401-retry as the other
-/// cloud chat calls). A meter must NEVER error the pane, so EVERY outcome that
-/// isn't a clean metered reading maps to `None` (the client hides the display):
-///
-/// | Case                                   | Result         |
-/// |----------------------------------------|----------------|
-/// | Personal context                       | None (no HTTP) |
-/// | Not configured / not signed in         | None           |
-/// | Network error                          | None           |
-/// | 401 (after the one-shot re-auth retry) | None           |
-/// | 404 (route absent on an older server)  | None           |
-/// | 400 / 402 / 403 / 5xx                  | None           |
-/// | 200 `{ unmetered: true }`              | None           |
-/// | 200 malformed body                     | None           |
-/// | 200 `{ used_turns, cap_turns, … }`     | Some(UsageDto) |
-#[tauri::command]
-pub async fn chat_usage(app: AppHandle) -> Result<Option<chat::cloud::UsageDto>, String> {
-    let state: State<AppState> = app.state();
-    let workspace = {
-        let conn = state.db.lock();
-        match ChatContext::load(&conn) {
-            ChatContext::Personal => return Ok(None),
-            ChatContext::Workspace(id) => id,
-        }
-    };
-    Ok(usage_cloud(&state, &workspace).await)
-}
-
 /// The name to call the person asking, or `None` when we genuinely don't know
 /// one. It is the referent for "I"/"me"/"my" in a turn (#103) — without it, a
 /// third of the questions people ask a meeting assistant can't be resolved.
@@ -1549,25 +1234,19 @@ pub async fn chat_usage(app: AppHandle) -> Result<Option<chat::cloud::UsageDto>,
 /// 2. The macOS account's full name.
 ///
 /// The OS name matters because it's the ONLY one the local-only majority has:
-/// Humla has no local account, and a cloud display name exists only once you've
-/// signed in. Falling back to it is what keeps "what did I promise?" answerable
-/// for a user who never signs in to anything. A short login name (`msmith`) is
+/// Humla has no account. Falling back to it is what keeps "what did I promise?"
+/// answerable. A short login name (`msmith`) is
 /// deliberately not used — as a referent it's worse than nothing.
 ///
 /// Never fatal: any failure just omits the line from the prompt.
 pub(crate) fn asker_name(conn: &rusqlite::Connection) -> Option<String> {
-    // No cloud name: the prompt path has no `CloudStatus` to hand, and a
-    // network fetch here would put the model's identity line behind a request.
-    display_name_chain(conn, None)
+    display_name_chain(conn)
 }
 
-/// The one name chain: `user_display_name` → the signed-in account's name →
-/// the macOS account's full name, first non-empty wins.
-///
-/// `cloud_name` is passed in rather than fetched because the only caller that has
-/// one already holds it in `CloudStatus.user`. Keeping the order here means the
-/// prompt's referent and the rename prefill can never disagree about who you are.
-fn display_name_chain(conn: &rusqlite::Connection, cloud_name: Option<&str>) -> Option<String> {
+/// The one name chain: `user_display_name` → the macOS account's full name,
+/// first non-empty wins. Keeping the order here means the prompt's referent and
+/// the rename prefill can never disagree about who you are.
+fn display_name_chain(conn: &rusqlite::Connection) -> Option<String> {
     let non_empty = |s: &str| {
         let t = s.trim();
         if t.is_empty() { None } else { Some(t.to_string()) }
@@ -1576,7 +1255,6 @@ fn display_name_chain(conn: &rusqlite::Connection, cloud_name: Option<&str>) -> 
         .ok()
         .flatten()
         .and_then(|v| non_empty(&v))
-        .or_else(|| cloud_name.and_then(non_empty))
         .or_else(os_full_name)
 }
 
@@ -1592,12 +1270,9 @@ fn display_name_chain(conn: &rusqlite::Connection, cloud_name: Option<&str>) -> 
 /// target before it runs is that mitigation, and an uneditable prefill would
 /// leave such a user stuck on the screen they're already on.
 #[tauri::command]
-pub fn speaker_default_name(
-    state: State<AppState>,
-    cloud_name: Option<String>,
-) -> Option<String> {
+pub fn speaker_default_name(state: State<AppState>) -> Option<String> {
     let conn = state.db.lock();
-    display_name_chain(&conn, cloud_name.as_deref())
+    display_name_chain(&conn)
 }
 
 /// The macOS account's full name ("Michael Wilhelmsen"), via `id -F`. `None` if
@@ -1613,146 +1288,6 @@ fn os_full_name() -> Option<String> {
     } else {
         Some(name)
     }
-}
-
-/// How the workspace's retrieval index looks to search — `ready` / `empty` /
-/// `quarantined` — so the chat pane can tell "your library is empty" apart from
-/// "the index is still building" (issue #102).
-///
-/// Only the server knows the difference: workspace retrieval runs over the
-/// workspace index, and a locally-empty mirror is not evidence of an empty
-/// workspace while that index is backfilling. `None` means "no information" and
-/// the caller keeps its local guess — Personal (where the local store IS the
-/// corpus), an older server without the route, or any failure. Like the turn
-/// meter, this is best-effort: it may improve the pane's copy, never break it.
-#[tauri::command]
-pub async fn chat_index_state(app: AppHandle) -> Result<Option<chat::cloud::IndexState>, String> {
-    let state: State<AppState> = app.state();
-    let workspace = {
-        let conn = state.db.lock();
-        match ChatContext::load(&conn) {
-            ChatContext::Personal => return Ok(None),
-            ChatContext::Workspace(id) => id,
-        }
-    };
-    let body = super::cloud::cloud_get_json(
-        &state,
-        "/api/chat/index-state",
-        &[("workspace_id", workspace.as_str())],
-    )
-    .await
-    .ok();
-    Ok(body.as_ref().and_then(chat::cloud::parse_index_state))
-}
-
-/// GET the usage endpoint, collapsing every non-metered outcome to `None` so the
-/// meter can only ever report or silently hide (issue #69). See [`chat_usage`]
-/// for the full mapping. One-shot 401 re-auth mirrors the other cloud calls.
-async fn usage_cloud(state: &State<'_, AppState>, workspace: &str) -> Option<chat::cloud::UsageDto> {
-    // Every failure — 404 / 402 / 403 / 400 / 5xx / repeated-401 / unreachable —
-    // collapses to `None` here, so the meter hides rather than errors.
-    let body =
-        super::cloud::cloud_get_json(state, "/api/chat/usage", &[("workspace_id", workspace)])
-            .await
-            .ok()?;
-    chat::cloud::parse_usage(&body)
-}
-
-// ── Workspace chat key (BYOK, issue #75) ─────────────────────────────────────
-// Owner-only set/rotate/remove + member-readable metadata, via the PocketBase
-// hook routes under /api/humla/chat/key* — through the same `cloud_*_json`
-// helpers (base/token/one-shot-401-retry) as the other cloud chat calls, mapped
-// with the key taxonomy `chat_key_error_message`. The key value transits Rust
-// memory only: it goes straight into the POST body and is never logged, stored,
-// or put in an error string — a failure is rendered from the server's
-// `reason`/`error` fields alone, never from the submitted key. Only metadata
-// comes back (the server's REST read rule returns null).
-
-/// Read a workspace's chat-key metadata (member-readable). Never returns the key
-/// — only `{ configured, last4, set_by, set_at, key_health }`. A 404 (route
-/// absent on an older/self-hosted server) reads as "not activated" so settings
-/// degrades gracefully; genuine HTTP failures error with a mapped message.
-#[tauri::command]
-pub async fn chat_key_meta(
-    app: AppHandle,
-    workspace_id: String,
-) -> Result<chat::cloud::ChatKeyMeta, String> {
-    let state: State<AppState> = app.state();
-    let body = match super::cloud::cloud_get_json(
-        &state,
-        "/api/humla/chat/key/meta",
-        &[("workspace_id", workspace_id.as_str())],
-    )
-    .await
-    {
-        Ok(body) => body,
-        // Route absent → "not activated" rather than an error.
-        Err(e) if e.is_not_found() => return Ok(chat::cloud::ChatKeyMeta::default()),
-        Err(e) => return Err(e.message(chat::cloud::chat_key_error_message)),
-    };
-    Ok(chat::cloud::parse_key_meta(&body))
-}
-
-/// POST a key to the set/rotate hook (server test-on-saves it against OpenAI)
-/// and map the response. Shared by the manual-entry and from-Keychain commands
-/// so the test-on-save path is identical. The `api_key` never leaves this
-/// request body — not logged, not stored, not in error strings.
-async fn chat_key_set_inner(
-    state: &State<'_, AppState>,
-    workspace_id: &str,
-    api_key: &str,
-) -> Result<chat::cloud::ChatKeyMeta, String> {
-    let body = serde_json::json!({ "workspace_id": workspace_id, "api_key": api_key });
-    let meta = super::cloud::cloud_post_json(state, "/api/humla/chat/key", &body)
-        .await
-        .map_err(|e| e.message(chat::cloud::chat_key_error_message))?;
-    Ok(chat::cloud::parse_key_meta(&meta))
-}
-
-/// Owner-only set/rotate of the workspace OpenAI key, from a key the owner typed
-/// into the composer. The `api_key` transits Rust memory only.
-#[tauri::command]
-pub async fn chat_key_set(
-    app: AppHandle,
-    workspace_id: String,
-    api_key: String,
-) -> Result<chat::cloud::ChatKeyMeta, String> {
-    let state: State<AppState> = app.state();
-    chat_key_set_inner(&state, &workspace_id, &api_key).await
-}
-
-/// Owner-only set/rotate using the personal OpenAI key already in the macOS
-/// Keychain (issue #75). Sharing a personal key with a team is a deliberate act,
-/// so the UI gates this behind an explicit button. The key is read in Rust and
-/// runs the same test-on-save path as `chat_key_set` — it NEVER enters the
-/// webview.
-#[tauri::command]
-pub async fn chat_key_set_from_keychain(
-    app: AppHandle,
-    workspace_id: String,
-) -> Result<chat::cloud::ChatKeyMeta, String> {
-    let state: State<AppState> = app.state();
-    let key = super::read_provider_api_key(&state, "openai")?
-        .ok_or("No OpenAI key is stored in Settings → Providers.")?;
-    chat_key_set_inner(&state, &workspace_id, &key).await
-}
-
-/// Owner-only remove of the workspace OpenAI key. Returns the (unconfigured)
-/// metadata so the UI updates in place.
-#[tauri::command]
-pub async fn chat_key_delete(
-    app: AppHandle,
-    workspace_id: String,
-) -> Result<chat::cloud::ChatKeyMeta, String> {
-    let state: State<AppState> = app.state();
-    let body = super::cloud::cloud_delete_json(
-        &state,
-        "/api/humla/chat/key",
-        &[("workspace_id", workspace_id.as_str())],
-    )
-    .await
-    .map_err(|e| e.message(chat::cloud::chat_key_error_message))?;
-    Ok(chat::cloud::parse_key_meta(&body))
 }
 
 /// Registers an in-flight turn's stop signal for a pane and clears it on drop,
@@ -1793,10 +1328,6 @@ impl Drop for TurnCancel {
 /// Stop the turn currently streaming in a pane. A no-op when nothing is in
 /// flight, so a stray click can't error. The partial answer (if any text
 /// arrived) is kept — see `chat::run_chat`.
-///
-/// Note this is a *client-side* stop for a workspace turn: the stream is
-/// dropped, but the server finishes generating and the tokens are really spent,
-/// so a metered turn still counts. A server-side cancel is the follow-up.
 #[tauri::command]
 pub fn chat_cancel(
     app: AppHandle,
@@ -1821,44 +1352,26 @@ pub async fn chat_send(
     folder_id: Option<String>,
     conversation_id: Option<String>,
     message: String,
-    // See `chat_send_cloud` — display name for a pinned authorship filter.
-    // Ignored on the Personal path, which never pins one.
-    owner_name: Option<String>,
-    // A drafting pane's breadth / authorship pin, chosen before any row existed
+    // A drafting pane's breadth and pins, chosen before any row existed
     // (#120). Only read when this turn CREATES the conversation; an existing row
-    // is already the source of truth for both.
+    // is already the source of truth for them.
     draft_breadth: Option<String>,
-    draft_owner_filter: Option<String>,
-    // The other two pins, carried the same way.
     draft_client_filter: Option<String>,
     draft_speaker_filter: Option<String>,
 ) -> Result<ChatSendResult, String> {
     let target = ChatTarget::from_ids(note_id, folder_id)?;
     let state: State<AppState> = app.state();
     // Validated on the way in, to the same standard as `chat_set_breadth` and
-    // `chat_set_owner_filter`. These two fields reach the same columns those
+    // `chat_set_pin`. These fields reach the same columns those
     // commands guard, so accepting them unchecked here would be a second, unguarded
     // door onto the same state — and the frontend enforcing it is not the same as
     // the backend enforcing it.
     let draft = validated_draft(
-        &state,
         &target,
         draft_breadth,
-        draft_owner_filter,
         draft_client_filter,
         draft_speaker_filter,
     )?;
-    // Chat is pinned to the loaded context (issue #58): a loaded workspace →
-    // the Teams (cloud) path; Personal (no workspace) → the on-device path
-    // below. There is no user-chosen tenant — it follows the sidebar workspace.
-    let in_workspace = {
-        let conn = state.db.lock();
-        ChatContext::load(&conn).workspace().is_some()
-    };
-    if in_workspace {
-        return chat_send_cloud(app, target, conversation_id, message, owner_name, draft).await;
-    }
-
     // Keychain read out of band — not inside the DB lock, and only the slot
     // the configured chat provider uses.
     let chat_key = chat_api_key(&state);
@@ -1866,8 +1379,6 @@ pub async fn chat_send(
     let (grounding, resolved, conversation_id, tool_scope, pins, workspace) = {
         let conn = state.db.lock();
         let note = anchor_note(&conn, &target)?;
-        // We branched to the Personal path above (no active workspace), so the
-        // tenant is Personal and there's no workspace to scope tools to.
         let workspace = String::new();
         let resolved = resolve_chat(&conn, chat_key).map_err(|e| e.to_string())?;
         // Resolve the target session (issue #61): an explicit id, else the
@@ -1893,15 +1404,7 @@ pub async fn chat_send(
         // self-healed against the Note's current folder.
         let breadth =
             effective_breadth(&conn, &conversation.id, &conversation.breadth, &target, note.as_ref())?;
-        // No authorship pin is read here: `chat_set_owner_filter` refuses one in
-        // Personal, where every note is the user's own, so the column is always
-        // empty on this path. The workspace turn (`chat_send_cloud`) is where the
-        // pin is read and sent. Keep this in step with that rejection — a pin that
-        // could be stored but not applied is the silent-no-op shape (#103).
-        //
-        // The Client and speaker pins ARE read here, which is the one way they
-        // differ from the authorship pin: Personal has both, so a pin set here
-        // has to clamp local retrieval or it is that same silent no-op.
+        // The Client and speaker pins clamp local retrieval.
         let pins = chat::Pins {
             client: non_empty(&conversation.client_filter),
             speaker: non_empty(&conversation.speaker_filter),
@@ -2009,297 +1512,13 @@ pub async fn chat_send(
     }
 }
 
-/// Result of one streamed workspace turn against the cloud endpoint.
-struct CloudTurn {
-    /// A non-2xx preflight response `(status, reason, error)` — the turn never
-    /// streamed (blocked or malformed). None once the SSE stream opened.
-    preflight: Option<(u16, String, String)>,
-    /// The server's conversation record id, learned from the streamed events —
-    /// persisted as the local conversation's `remote_id` so later turns resume.
-    server_conversation_id: Option<String>,
-}
-
-/// Workspace (Teams) chat turn (issue #50): delegate to the deployed humla-cloud
-/// `POST /api/chat`, stream the SSE response, and re-emit it on the SAME `chat_*`
-/// events the local loop uses (story 18). The conversation is server-
-/// authoritative — its messages live in the cloud (read-through via
-/// `chat_history`); locally we keep only a handle row whose `remote_id` maps to
-/// the server conversation. `"workspace"` always resolves to the *active*
-/// workspace, so a turn can never reach a different tenant (story 5/19).
-async fn chat_send_cloud(
-    app: AppHandle,
-    target: ChatTarget,
-    conversation_id: Option<String>,
-    message: String,
-    // Display name for a pinned authorship filter, resolved by the caller from
-    // the workspace roster. Prompt text only — the id on the conversation row is
-    // what actually filters — so it is passed per turn rather than cached in a
-    // column that a rename would leave stale.
-    owner_name: Option<String>,
-    draft: DraftSettings,
-) -> Result<ChatSendResult, String> {
-    let state: State<AppState> = app.state();
-    let (
-        workspace,
-        folder_id,
-        title,
-        conversation,
-        breadth,
-        pins,
-        client_display,
-        folder_display,
-    ) = {
-        let conn = state.db.lock();
-        let ctx = ChatContext::load(&conn);
-        let Some(workspace) = ctx.workspace() else {
-            return Err("No workspace selected — switch to a workspace to use Team chat.".into());
-        };
-        let note = anchor_note(&conn, &target)?;
-        // Resolve the target workspace-handle session (issue #61): an explicit
-        // id, else the active/most-recent handle, lazily creating one (remote_id
-        // filled from the server's response below) on the first turn.
-        let conversation =
-            resolve_or_create(&conn, workspace, &target, conversation_id.as_deref(), draft)?;
-        // Breadth is read from the (workspace) conversation row and self-healed
-        // against the Note's folder, exactly like the Personal path (issue #58).
-        let breadth =
-            effective_breadth(&conn, &conversation.id, &conversation.breadth, &target, note.as_ref())?;
-        // The pinned authorship filter (#103), read from the same row as breadth
-        // and binding the same way: it's the user's stated intent, so it applies
-        // whatever the model asks for.
-        let pins = ConversationPins::of(&conversation);
-        // The Client pin's display name is resolved here as the folder's is: the
-        // scope carries an id the model has never seen, so losing the name costs
-        // the disclosure. The speaker pin is its own name.
-        let client_display = non_empty(&pins.client)
-            .and_then(|id| db::client_name(&conn, &id).ok().flatten());
-        // The folder's display NAME for #113's breadth disclosure — the server has to
-        // say `the folder "K2 pilot"`, and the scope carries only an id the user has
-        // never seen. Resolved here beside the folder id it names; `None` degrades to
-        // no disclosure rather than to an empty quoted string.
-        //
-        // The folder comes from the TARGET first (#110) and only then from the
-        // anchor note — the same precedence `resolve_scope` uses locally, and for
-        // the same reason: a folder thread's own folder is the identity the user
-        // chose, while a note's is merely where the note happens to live.
-        let folder_id = target
-            .folder_id()
-            .map(str::to_string)
-            .or_else(|| note.as_ref().and_then(|n| n.folder_id.clone()));
-        let folder_display = folder_id
-            .as_deref()
-            .and_then(|id| db::folder_name(&conn, id).ok().flatten());
-        (
-            workspace.to_string(),
-            folder_id,
-            // The server derives a global conversation's title from the first
-            // message, the same as Personal; there's no note title to send.
-            note.as_ref().map(|n| n.title.clone()).unwrap_or_default(),
-            conversation,
-            breadth,
-            pins,
-            client_display,
-            folder_display,
-        )
-    };
-
-    let body = chat::cloud::build_cloud_request(
-        conversation.remote_id.as_deref(),
-        &workspace,
-        &message,
-        Some(&title),
-        chat::cloud::CloudScope {
-            breadth: &breadth,
-            note_id: target.note_id(),
-            folder_id: folder_id.as_deref(),
-            // The name is display-only, resolved by the caller from the workspace
-            // roster; the id is what the server filters on.
-            owner: (!pins.owner.trim().is_empty())
-                .then(|| (pins.owner.as_str(), owner_name.as_deref().unwrap_or(""))),
-            client: (!pins.client.trim().is_empty())
-                .then(|| (pins.client.as_str(), client_display.as_deref().unwrap_or(""))),
-            speaker: (!pins.speaker.trim().is_empty()).then_some(pins.speaker.as_str()),
-            // Display names for #113's disclosure. `title` IS the anchor note's title
-            // here (the server derives a conversation title from it), so it doubles as
-            // the note-breadth name rather than being resolved twice.
-            note_title: Some(title.as_str()).filter(|t| !t.trim().is_empty()),
-            folder_name: folder_display.as_deref(),
-        },
-    )?;
-
-    // Stream the turn, retrying once after a 401 (a stale cached token → forget
-    // it and re-authenticate from stored credentials, mirroring cloud.rs).
-    // Stop signal for this pane (issue #80). A workspace stop is client-side
-    // only: it ends the stream so tokens stop appearing, but the server keeps
-    // generating and finishes the turn, so a metered turn still counts and the
-    // history reload afterwards shows the server's complete answer rather than
-    // the partial. A server-side cancel is the follow-up (humla-cloud#26).
-    let turn_cancel = TurnCancel::register(&state, target.scope_id());
-    let mut attempt = 0u8;
-    let outcome = loop {
-        let (base, token) = super::cloud_auth::cloud_session(&state).await?;
-        let turn =
-            stream_cloud_turn(&app, &base, &token, &body, &conversation.id, turn_cancel.flag())
-                .await;
-        match turn {
-            Ok(t) => {
-                if matches!(&t.preflight, Some((401, _, _))) && attempt == 0 {
-                    super::cloud_auth::forget_session();
-                    attempt += 1;
-                    continue;
-                }
-                break t;
-            }
-            Err(e) => {
-                let _ = app.emit(
-                    "chat_error",
-                    ChatErrorPayload {
-                        conversation_id: conversation.id.clone(),
-                        message: e.clone(),
-                        reason: String::new(),
-                    },
-                );
-                return Err(e);
-            }
-        }
-    };
-
-    if let Some((_, reason, server_msg)) = outcome.preflight {
-        let text = chat::cloud::cloud_chat_error_message(&reason, &server_msg);
-        let _ = app.emit(
-            "chat_error",
-            ChatErrorPayload {
-                conversation_id: conversation.id.clone(),
-                message: text.clone(),
-                reason: reason.clone(),
-            },
-        );
-        return Err(text);
-    }
-
-    // Remember the server conversation id for resume + read-through history.
-    if let Some(server_id) = outcome.server_conversation_id {
-        if conversation.remote_id.as_deref() != Some(server_id.as_str()) {
-            let conn = state.db.lock();
-            let _ = db::set_conversation_remote_id(&conn, &conversation.id, &server_id);
-        }
-    }
-
-    // Truncation is a server concern for workspace turns; the client just relays.
-    Ok(ChatSendResult { conversation_id: conversation.id, truncated: false })
-}
-
-/// POST the turn and pump the SSE response, re-emitting each event on the
-/// matching `chat_*` Tauri event. Server event payloads already carry the
-/// frontend-shaped camelCase fields; we only re-stamp `conversationId` to the
-/// LOCAL conversation id (so the UI keys turns the same across tenants) and
-/// capture the server's id to persist. A non-2xx response is returned as a
-/// structured preflight error instead of a stream.
-async fn stream_cloud_turn(
-    app: &AppHandle,
-    base: &str,
-    token: &str,
-    body: &serde_json::Value,
-    local_conversation_id: &str,
-    cancel: &chat::CancelFlag,
-) -> Result<CloudTurn, String> {
-    use futures_util::StreamExt;
-    let resp = reqwest::Client::new()
-        .post(format!("{}/api/chat", base.trim_end_matches('/')))
-        .bearer_auth(token)
-        .json(body)
-        .send()
-        .await
-        .map_err(|e| format!("Couldn't reach Team chat: {e}"))?;
-
-    let status = resp.status();
-    if !status.is_success() {
-        let val: serde_json::Value = resp.json().await.unwrap_or_default();
-        let reason = val.get("reason").and_then(|r| r.as_str()).unwrap_or_default().to_string();
-        let server_msg = val.get("error").and_then(|m| m.as_str()).unwrap_or_default().to_string();
-        return Ok(CloudTurn {
-            preflight: Some((status.as_u16(), reason, server_msg)),
-            server_conversation_id: None,
-        });
-    }
-
-    // Degraded fallback (AC2): if a 2xx response isn't an SSE stream, treat it as
-    // a non-streamed whole-turn — emit the answer as one chunk + done, so the UI
-    // completes rather than hanging on a stream that never frames.
-    let is_sse = resp
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(|ct| ct.contains("text/event-stream"))
-        .unwrap_or(false);
-    if !is_sse {
-        let body = resp.text().await.unwrap_or_default();
-        let answer = chat::cloud::whole_turn_answer(&body);
-        let message_id = uuid::Uuid::new_v4().to_string();
-        let _ = app.emit(
-            "chat_text_delta",
-            serde_json::json!({
-                "conversationId": local_conversation_id,
-                "messageId": message_id,
-                "blockId": uuid::Uuid::new_v4().to_string(),
-                "delta": answer,
-            }),
-        );
-        let _ = app.emit(
-            "chat_done",
-            serde_json::json!({ "conversationId": local_conversation_id, "messageId": message_id }),
-        );
-        return Ok(CloudTurn { preflight: None, server_conversation_id: None });
-    }
-
-    // Buffer raw bytes and frame on the byte terminator, decoding only COMPLETE
-    // frames — so a multibyte codepoint split across two network chunks (e.g. a
-    // Norwegian å in a streamed delta) is never mangled by a mid-character decode.
-    let mut byte_stream = resp.bytes_stream();
-    let mut buf: Vec<u8> = Vec::new();
-    let mut server_conversation_id: Option<String> = None;
-    while let Some(chunk) = byte_stream.next().await {
-        // Stopped: drop the stream so deltas stop reaching the UI (issue #80).
-        // Anything already framed has been emitted; the server finishes its turn
-        // regardless, so this is a UI stop, not a billing one.
-        if cancel.is_cancelled() {
-            break;
-        }
-        let bytes = chunk.map_err(|e| format!("Team chat stream error: {e}"))?;
-        buf.extend_from_slice(&bytes);
-        while let Some((idx, delim)) = chat::cloud::find_event_end(&buf) {
-            let frame: Vec<u8> = buf.drain(..idx + delim).collect();
-            let text = String::from_utf8_lossy(&frame[..idx]);
-            let Some((event, data)) = chat::cloud::parse_sse_frame(&text) else { continue };
-            let Ok(mut payload) = serde_json::from_str::<serde_json::Value>(&data) else { continue };
-            if server_conversation_id.is_none() {
-                if let Some(sid) = payload.get("conversationId").and_then(|c| c.as_str()) {
-                    if !sid.is_empty() {
-                        server_conversation_id = Some(sid.to_string());
-                    }
-                }
-            }
-            if let Some(obj) = payload.as_object_mut() {
-                obj.insert("conversationId".into(), serde_json::json!(local_conversation_id));
-            }
-            if let Some(tauri_event) = chat::cloud::tauri_event_for(&event) {
-                let _ = app.emit(tauri_event, payload);
-            }
-        }
-    }
-    Ok(CloudTurn { preflight: None, server_conversation_id })
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatMessageDto {
     id: String,
     role: String,
     seq: i64,
-    /// Raw opencode-v2 parts JSON. Passed through verbatim: the local path
-    /// serialises its `Vec<chat::Part>` into this value; the workspace read-
-    /// through passes PocketBase's stored parts straight through (already the
-    /// frontend-shaped camelCase), so tool/citation parts render either way.
+    /// Raw opencode-v2 parts JSON: the serialised `Vec<chat::Part>`.
     parts: serde_json::Value,
     created_at: i64,
 }
@@ -2309,9 +1528,7 @@ pub struct ChatMessageDto {
 /// active/most-recent one (this is what keeps the single-thread panel working).
 /// When the Note has no session yet, returns empty messages + `conversationId:
 /// None` WITHOUT creating a row — merely opening the Chat tab must persist
-/// nothing. For a workspace tenant (issue #50) the messages are a read-through
-/// of the server-authoritative conversation (via the handle's `remote_id`);
-/// they never live in the local `messages` table.
+/// nothing.
 #[tauri::command]
 pub async fn chat_history(
     app: AppHandle,
@@ -2321,34 +1538,6 @@ pub async fn chat_history(
 ) -> Result<ChatHistoryResult, String> {
     let target = ChatTarget::from_ids(note_id, folder_id)?;
     let state: State<AppState> = app.state();
-    // Chat follows the loaded context (issue #58): a loaded workspace reads its
-    // server-authoritative conversation; Personal reads the local table.
-    let ctx = {
-        let conn = state.db.lock();
-        ChatContext::load(&conn)
-    };
-
-    if let Some(workspace) = ctx.workspace() {
-        // Resolve the target workspace handle (explicit id, else most-recent),
-        // then read its messages through PocketBase (source of truth for shared
-        // conversations). No handle → nothing persisted yet, so empty + None.
-        let handle = {
-            let conn = state.db.lock();
-            resolve_for_read(&conn, workspace, &target, conversation_id.as_deref())?
-        };
-        let Some(handle) = handle else {
-            return Ok(ChatHistoryResult { conversation_id: None, messages: Vec::new() });
-        };
-        let messages = match handle.remote_id.as_deref() {
-            Some(remote_id) => {
-                let records = super::cloud::fetch_chat_messages(&state, remote_id).await?;
-                records.iter().filter_map(map_remote_message).collect()
-            }
-            None => Vec::new(),
-        };
-        return Ok(ChatHistoryResult { conversation_id: Some(handle.id), messages });
-    }
-
     let conn = state.db.lock();
     let Some(conversation) =
         resolve_for_read(&conn, CHAT_TENANT_PERSONAL, &target, conversation_id.as_deref())?
@@ -2367,439 +1556,6 @@ pub async fn chat_history(
         })
         .collect();
     Ok(ChatHistoryResult { conversation_id: Some(conversation.id), messages })
-}
-
-/// Map one PocketBase `chat_messages` record (read-through) to the UI DTO. Its
-/// `parts` are already the frontend-shaped opencode-v2 JSON, so they pass
-/// through untouched; `created` (RFC3339 autodate) becomes epoch-ms.
-fn map_remote_message(rec: &serde_json::Value) -> Option<ChatMessageDto> {
-    let id = rec.get("id")?.as_str()?.to_string();
-    let role = rec.get("role").and_then(|r| r.as_str()).unwrap_or("assistant").to_string();
-    let seq = rec.get("seq").and_then(|s| s.as_i64()).unwrap_or(0);
-    let parts = rec.get("parts").cloned().unwrap_or_else(|| serde_json::json!([]));
-    let created_at = rec
-        .get("created")
-        .and_then(|c| c.as_str())
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|d| d.timestamp_millis())
-        .unwrap_or(0);
-    Some(ChatMessageDto { id, role, seq, parts, created_at })
-}
-
-// ── Workspace (Teams) session list/create — humla-cloud#19 contract ──────────
-//
-// Workspace conversations are server-authoritative (issue #50); the desktop
-// keeps a local handle row per server conversation, whose `remote_id` maps to
-// the server record. The two routes below are PocketBase HOOKS under `/api/humla`
-// (NOT the chat service `/api/chat*`, which the prod Caddyfile routes to a
-// separate service that has no such route). PocketBase bearer token, JSON
-// bodies. Timestamps are PocketBase-native `created` / `updated`, parsed the
-// same way as the `chat_messages` read-through (`map_remote_message`).
-//
-//   GET /api/humla/chat/conversations?workspace_id=<ws>&note_id=<note>
-//     Authorization: Bearer <pb_token>
-//     → 200 { "conversations": [ {
-//           "id":            <server conversation record id>,
-//           "title":         <string, may be empty>,
-//           "breadth":       "note" | "folder" | "all",
-//           "created":       <PB datetime>,
-//           "updated":       <PB datetime>,
-//           "message_count": <int>,
-//           "created_by":    <pb user id>
-//         }, … ] }          // ordered most-recently-updated first (-updated)
-//     Membership is enforced by the token; a non-member → 403 { reason:"not_a_member", error }.
-//
-//   POST /api/humla/chat/conversations
-//     Authorization: Bearer <pb_token>
-//     Content-Type: application/json
-//     { "workspace_id": <ws>, "note_id": <note>, "breadth": "note"|"folder"|"all" }
-//     → 200 <conversation>          // FLAT object, same shape as a GET list item;
-//                                   // there is NO { "conversation": … } wrapper.
-//     The server is a DUMB creator: it creates unconditionally and honors the
-//     POST `breadth`. The no-op guard is therefore CLIENT-side (see
-//     `new_conversation_cloud`): list first, and if the most-recent session has
-//     zero messages, reuse it instead of POSTing. Errors mirror `/api/chat`'s
-//     preflight shape { reason, error }.
-//
-// Legacy merge (pre-#19): conversations that predate #19 have NO server-side note
-// association, so the per-note GET omits them until one "adopting turn" — the
-// persist route stamps `note` one-way from the send scope's note_id, only when
-// currently empty. The client therefore UNIONS the server list with local handle
-// rows for (tenant=workspace, scope_id=note) whose `remote_id` is absent from the
-// server response (dedup by remote_id — `unlisted_legacy_handles`), using the
-// local row's breadth/updated_at (title may be empty this slice). Resolving the
-// most-recent session needs no extra work: those legacy threads already exist as
-// local handle rows, so `latest_conversation` surfaces them — a legacy-only note
-// still resolves its thread, `chat_history` reads it through by `remote_id`, and
-// the first send continues it (after which the server adopts it into the list).
-//
-// Identity: metas returned to the frontend use the LOCAL handle id (reconciled by
-// `remote_id`), so history/send/breadth all key on the same id across tenants.
-//
-// 404 fallback: a self-hosted server without these routes degrades to the legacy
-// single-conversation read-through (`legacy_workspace_sessions`).
-
-/// Get-or-create the LOCAL handle row for a server conversation (issue #61),
-/// matched by `remote_id`. A new handle adopts the server's breadth; an existing
-/// one is returned untouched. Keeps server conversations from being duplicated
-/// locally as the session list reconciles them.
-fn ensure_workspace_handle(
-    conn: &rusqlite::Connection,
-    workspace: &str,
-    target: &ChatTarget,
-    remote_id: &str,
-    breadth: &str,
-    // Adopted at handle creation, never written over an existing local row. A
-    // field absent from the server's row is `None`, which is NOT the same as ""
-    // and must not stamp an empty pin over an inherited one.
-    pins: ServerPins<'_>,
-) -> Result<db::Conversation, String> {
-    // An EXISTING handle is returned untouched — the local row is the source of
-    // truth for both breadth and the pin, and this reconciliation runs on every
-    // list refresh. Letting the server win here would resurrect a pin the user
-    // just cleared: clear it, don't send a turn (so the persist never mirrors the
-    // clear upward), reopen the pane, and the stale server value writes itself
-    // back over the local "". The filter would start applying again with nobody
-    // having touched it — the silent-no-op shape this whole area keeps producing.
-    //
-    // The cost is that a pin set on another device reaches only a device that has
-    // not opened this thread yet (which adopts it below, at handle creation).
-    // That is the same guarantee breadth has always had, and the failure it trades
-    // for — a pin that doesn't propagate — is visible on the chip, where a pin
-    // that undoes itself is not.
-    if let Some(c) = db::get_conversation_by_remote_id(conn, workspace, remote_id)
-        .map_err(|e| e.to_string())?
-    {
-        return Ok(c);
-    }
-    let breadth = chat::validate_breadth(breadth).unwrap_or_else(|_| chat::default_breadth(target));
-    let handle =
-        db::create_conversation(conn, workspace, target.scope(), target.scope_id(), breadth)
-            .map_err(|e| e.to_string())?;
-    db::set_conversation_remote_id(conn, &handle.id, remote_id).map_err(|e| e.to_string())?;
-    let pin = pins.owner.unwrap_or_default();
-    let client = pins.client.unwrap_or_default();
-    let speaker = pins.speaker.unwrap_or_default();
-    if !pin.is_empty() {
-        db::set_conversation_owner_filter(conn, &handle.id, Some(pin)).map_err(|e| e.to_string())?;
-    }
-    if !client.is_empty() {
-        db::set_conversation_client_filter(conn, &handle.id, Some(client))
-            .map_err(|e| e.to_string())?;
-    }
-    if !speaker.is_empty() {
-        db::set_conversation_speaker_filter(conn, &handle.id, Some(speaker))
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(db::Conversation {
-        owner_filter: pin.to_string(),
-        client_filter: client.to_string(),
-        speaker_filter: speaker.to_string(),
-        ..handle
-    })
-}
-
-/// Parse a PocketBase timestamp to epoch-ms (0 on failure). Matches the
-/// `chat_messages` read-through's handling (`map_remote_message`) so all
-/// server-sourced dates use one parser.
-fn pb_timestamp_ms(v: Option<&serde_json::Value>) -> i64 {
-    v.and_then(|x| x.as_str())
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|d| d.timestamp_millis())
-        .unwrap_or(0)
-}
-
-/// Map one server conversation JSON to a session-list entry, reconciling it to
-/// its local handle so the returned `id` is local. Handles both the GET list
-/// items and the FLAT POST-create response (same shape).
-fn cloud_conversation_meta(
-    state: &State<AppState>,
-    workspace: &str,
-    target: &ChatTarget,
-    item: &serde_json::Value,
-) -> Result<ConversationMeta, String> {
-    let remote_id = item
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or("Team chat returned a conversation without an id")?;
-    let breadth =
-        item.get("breadth").and_then(|v| v.as_str()).unwrap_or_else(|| chat::default_breadth(target));
-    // `None` is a server that doesn't know the field (pre-#39, or self-hosted and
-    // not yet updated) — NOT the same as "off", and the distinction matters at
-    // handle creation, where absent must not stamp an empty pin over an inherited
-    // one.
-    let owner_filter = item.get("owner_filter").and_then(|v| v.as_str());
-    let client_filter = item.get("client_filter").and_then(|v| v.as_str());
-    let speaker_filter = item.get("speaker_filter").and_then(|v| v.as_str());
-    let handle = {
-        let conn = state.db.lock();
-        ensure_workspace_handle(
-            &conn,
-            workspace,
-            target,
-            remote_id,
-            breadth,
-            ServerPins { owner: owner_filter, client: client_filter, speaker: speaker_filter },
-        )?
-    };
-    Ok(ConversationMeta {
-        id: handle.id,
-        title: item.get("title").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        breadth: breadth.to_string(),
-        // The HANDLE's pin, not the server item's: the local row is what the next
-        // turn reads, so reporting the server's would let the chip show a filter
-        // the turn isn't applying.
-        owner_filter: handle.owner_filter,
-        client_filter: handle.client_filter,
-        speaker_filter: handle.speaker_filter,
-        updated_at: pb_timestamp_ms(item.get("updated")),
-        message_count: item.get("message_count").and_then(|v| v.as_i64()).unwrap_or(0),
-    })
-}
-
-/// Local workspace handles the server GET omitted — the legacy-merge core (issue
-/// #61). A handle is "unlisted" when it has a `remote_id` (so it maps to a real
-/// server conversation) that is NOT among the server's returned ids. Pure so the
-/// union/dedup logic is unit-testable without HTTP.
-fn unlisted_legacy_handles<'a>(
-    server_remote_ids: &std::collections::HashSet<String>,
-    local_handles: &'a [db::Conversation],
-) -> Vec<&'a db::Conversation> {
-    local_handles
-        .iter()
-        .filter(|h| {
-            h.remote_id
-                .as_deref()
-                .is_some_and(|rid| !server_remote_ids.contains(rid))
-        })
-        .collect()
-}
-
-/// List a workspace Note's sessions from humla-cloud (issue #61). GETs the server
-/// list (one-shot 401 re-auth, 404 → legacy fallback), reconciles each to a local
-/// handle, then UNIONS in local handles the server omitted (pre-#19 threads not
-/// yet adopted — their message count is read through). Most-recently-updated
-/// first.
-/// Query params for the conversations route. Both ids are optional and select
-/// which of the server's three disjoint populations is addressed (humla-cloud#26,
-/// #110): `note_id` → that Note's threads, `folder_id` → that folder's, NEITHER →
-/// the library-wide ones. The server keys the note-less lists off its own `scope`
-/// field, so an absent id must be omitted rather than sent as a sentinel it would
-/// reject as malformed.
-fn conversation_route_params<'a>(
-    workspace: &'a str,
-    target: &'a ChatTarget,
-) -> Vec<(&'a str, &'a str)> {
-    let mut params = vec![("workspace_id", workspace)];
-    if let Some(id) = target.note_id() {
-        params.push(("note_id", id));
-    }
-    if let Some(id) = target.folder_id() {
-        params.push(("folder_id", id));
-    }
-    params
-}
-
-/// Body for creating a conversation server-side. Same rule as the params above,
-/// plus the each-breadth-carries-its-own-id check in its one owner.
-fn new_conversation_body(
-    workspace: &str,
-    target: &ChatTarget,
-    breadth: &str,
-) -> Result<serde_json::Value, String> {
-    chat::check_anchor(
-        breadth,
-        target.note_id().is_some(),
-        // A folder breadth may also be a NOTE thread widened to its folder, whose
-        // folder the server reads from the note. Only a folder target must supply
-        // the id itself — which is exactly what it does.
-        target.folder_id().is_some() || target.note_id().is_some(),
-    )?;
-    let mut body = serde_json::json!({ "workspace_id": workspace, "breadth": breadth });
-    if let Some(id) = target.note_id() {
-        body["note_id"] = serde_json::json!(id);
-    }
-    if let Some(id) = target.folder_id() {
-        body["folder_id"] = serde_json::json!(id);
-    }
-    Ok(body)
-}
-
-async fn list_conversations_cloud(
-    state: &State<'_, AppState>,
-    workspace: &str,
-    target: &ChatTarget,
-) -> Result<Vec<ConversationMeta>, String> {
-    let params = conversation_route_params(workspace, target);
-    let val = match super::cloud::cloud_get_json(
-        state,
-        "/api/humla/chat/conversations",
-        &params,
-    )
-    .await
-    {
-        Ok(val) => val,
-        // Route absent (pre-#19 server) → the single-handle fallback.
-        Err(e) if e.is_not_found() => {
-            return legacy_workspace_sessions(state, workspace, target).await
-        }
-        Err(e) => return Err(e.message(chat::cloud::cloud_chat_error_message)),
-    };
-
-    let items = val.get("conversations").and_then(|c| c.as_array()).cloned().unwrap_or_default();
-    let mut metas: Vec<ConversationMeta> = Vec::with_capacity(items.len());
-    let mut server_remote_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let hide_empty = list_filter_for(target) == db::ListFilter::WithMessages;
-    for item in &items {
-        if let Some(rid) = item.get("id").and_then(|v| v.as_str()) {
-            server_remote_ids.insert(rid.to_string());
-        }
-        // A drafting target can never reopen an empty thread, so an empty row can
-        // only be residue — from an older client, or a thread abandoned before its
-        // first turn. Emptiness is read from the SERVER's count, deliberately: a
-        // workspace's messages live in PocketBase and are never written to the local
-        // table, so the local count reads 0 for every workspace thread and would
-        // hide the entire list. Still recorded in `server_remote_ids` above, so a
-        // hidden row doesn't get resurrected by the legacy union below.
-        if hide_empty && item.get("message_count").and_then(|v| v.as_i64()).unwrap_or(0) == 0 {
-            continue;
-        }
-        metas.push(cloud_conversation_meta(state, workspace, target, item)?);
-    }
-
-    // Union: local handles the server GET omitted (pre-#19, not yet adopted).
-    // Snapshot the fields we need up front so no borrow / db lock crosses the
-    // read-through `.await`.
-    let legacy: Vec<(String, String, String, i64, String)> = {
-        let conn = state.db.lock();
-        let local_handles =
-            db::list_conversations(
-                &conn,
-                workspace,
-                target.scope(),
-                target.scope_id(),
-                None,
-                // NOT `list_filter_for` — deliberately. This reads LOCAL handles for
-                // a workspace, and a workspace's messages live in PocketBase and are
-                // never written to the local table, so a `WithMessages` filter here
-                // matches nothing and would drop every server-omitted handle from
-                // the union. The empty-thread filter for a workspace is applied
-                // above, off the SERVER's `message_count`, which is the only count
-                // that means anything for these rows.
-                db::ListFilter::All,
-            )
-                .map_err(|e| e.to_string())?;
-        unlisted_legacy_handles(&server_remote_ids, &local_handles)
-            .into_iter()
-            .map(|h| {
-                (
-                    h.id.clone(),
-                    h.remote_id.clone().unwrap_or_default(),
-                    h.breadth.clone(),
-                    h.updated_at,
-                    resolved_title(h),
-                )
-            })
-            .collect()
-    };
-    for (id, remote_id, breadth, updated_at, title) in legacy {
-        // A legacy handle has a remote_id, so it has server messages; read the
-        // real count so the no-op guard never reuses a non-empty legacy thread.
-        let message_count = super::cloud::fetch_chat_messages(state, &remote_id)
-            .await
-            .map(|r| r.len() as i64)
-            .unwrap_or(0);
-        // A legacy handle predates every pin, so it has none.
-        metas.push(ConversationMeta {
-            id,
-            title,
-            breadth,
-            owner_filter: String::new(),
-            client_filter: String::new(),
-            speaker_filter: String::new(),
-            updated_at,
-            message_count,
-        });
-    }
-
-    // Server list is already -updated; re-sort so merged legacy entries land in
-    // the right place (id break-ties deterministically).
-    metas.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| b.id.cmp(&a.id)));
-    Ok(metas)
-}
-
-/// The pre-#19 fallback: the note's single workspace handle (if it exists) as a
-/// one-element session list, its message count read through from the server.
-async fn legacy_workspace_sessions(
-    state: &State<'_, AppState>,
-    workspace: &str,
-    target: &ChatTarget,
-) -> Result<Vec<ConversationMeta>, String> {
-    let handle = {
-        let conn = state.db.lock();
-        db::latest_conversation(&conn, workspace, target.scope(), target.scope_id())
-            .map_err(|e| e.to_string())?
-    };
-    let Some(handle) = handle else { return Ok(Vec::new()) };
-    let message_count = match handle.remote_id.as_deref() {
-        Some(remote_id) => {
-            super::cloud::fetch_chat_messages(state, remote_id).await.map(|r| r.len() as i64).unwrap_or(0)
-        }
-        None => 0,
-    };
-    Ok(vec![ConversationMeta {
-        title: resolved_title(&handle),
-        id: handle.id,
-        breadth: handle.breadth,
-        owner_filter: handle.owner_filter,
-        client_filter: handle.client_filter,
-        speaker_filter: handle.speaker_filter,
-        updated_at: handle.updated_at,
-        message_count,
-    }])
-}
-
-/// Create a workspace session via humla-cloud (issue #61). The server is a dumb
-/// creator, so the no-op guard is CLIENT-side: list first (server ∪ legacy) and,
-/// if the most-recent session is empty, reuse it instead of POSTing. Otherwise
-/// POST — inheriting breadth from the Note's most-recent workspace session, which
-/// the server honors — and reconcile the FLAT response to a local handle. A 404
-/// (route absent on an older server) is a clean error: a server-authoritative
-/// conversation can't be created without the server.
-async fn new_conversation_cloud(
-    state: &State<'_, AppState>,
-    workspace: &str,
-    target: &ChatTarget,
-) -> Result<ConversationMeta, String> {
-    // Client-side no-op guard: reuse the empty most-recent session if there is
-    // one (the list already unions server + legacy and is most-recent-first).
-    let existing = list_conversations_cloud(state, workspace, target).await?;
-    if let Some(most_recent) = existing.into_iter().next() {
-        if most_recent.message_count == 0 {
-            return Ok(most_recent);
-        }
-    }
-
-    // Inherit breadth from the target's most-recent session in THIS workspace,
-    // just like the personal path (the target's own default when there's none).
-    let breadth = {
-        let conn = state.db.lock();
-        inherited_breadth(&conn, workspace, target)
-    };
-    let body = new_conversation_body(workspace, target, &breadth)?;
-    // The POST response is the conversation object itself — no wrapper.
-    let val = match super::cloud::cloud_post_json(state, "/api/humla/chat/conversations", &body)
-        .await
-    {
-        Ok(val) => val,
-        Err(e) if e.is_not_found() => {
-            return Err("Starting a new Team chat needs a newer server — this workspace's server \
-                        doesn't support multiple chat sessions yet."
-                .into())
-        }
-        Err(e) => return Err(e.message(chat::cloud::cloud_chat_error_message)),
-    };
-    cloud_conversation_meta(state, workspace, target, &val)
 }
 
 #[cfg(test)]
@@ -2854,67 +1610,6 @@ mod tests {
         }
         // Garbage is still loud.
         assert!(resolve_scope("everything", None, None).is_err());
-    }
-
-    /// #93's proof is Rust tests, so the two cloud shapes are asserted directly
-    /// rather than left to inspection inside async command bodies. Both encode the
-    /// same humla-cloud#26 rule: the absence of `note_id` is what selects the
-    /// library-wide list, so a sentinel would be rejected as malformed.
-    #[test]
-    fn the_cloud_conversation_routes_omit_the_anchor_for_a_library_wide_target() {
-        let note = ChatTarget::Note("n1".into());
-        let global = ChatTarget::Global;
-
-        assert_eq!(
-            conversation_route_params("ws1", &note),
-            vec![("workspace_id", "ws1"), ("note_id", "n1")]
-        );
-        let global_params = conversation_route_params("ws1", &global);
-        assert_eq!(global_params, vec![("workspace_id", "ws1")]);
-        assert!(
-            !global_params.iter().any(|(k, _)| *k == "note_id"),
-            "the param must be absent, not empty — the server 400s a malformed note_id"
-        );
-
-        let body = new_conversation_body("ws1", &note, "note").unwrap();
-        assert_eq!(body["note_id"], "n1");
-        let global_body = new_conversation_body("ws1", &global, "all").unwrap();
-        assert!(global_body.get("note_id").is_none());
-        assert_eq!(global_body["breadth"], "all");
-        // A library-wide create MUST be breadth "all": it carries neither id, so
-        // any narrowing breadth would have nothing to clamp on — a 400 server-side,
-        // caught here as our bug instead.
-        assert!(new_conversation_body("ws1", &global, "note")
-            .unwrap_err()
-            .contains("needs an anchor note"));
-        assert!(new_conversation_body("ws1", &global, "folder")
-            .unwrap_err()
-            .contains("needs a folder"));
-    }
-
-    /// #110's wire shape, and the third of the server's disjoint populations: a
-    /// folder target addresses its own list with `folder_id` and no `note_id`.
-    #[test]
-    fn the_cloud_conversation_routes_address_a_folder_by_its_own_id() {
-        let folder = ChatTarget::Folder("f1".into());
-        assert_eq!(
-            conversation_route_params("ws1", &folder),
-            vec![("workspace_id", "ws1"), ("folder_id", "f1")]
-        );
-        // The anchor param is absent, not empty — the two ids are alternatives, and
-        // sending both is a 400 server-side.
-        assert!(!conversation_route_params("ws1", &folder)
-            .iter()
-            .any(|(k, _)| *k == "note_id"));
-
-        let body = new_conversation_body("ws1", &folder, "folder").unwrap();
-        assert_eq!(body["folder_id"], "f1");
-        assert_eq!(body["breadth"], "folder");
-        assert!(body.get("note_id").is_none());
-        // A folder target has no note, so `note` breadth has nothing to clamp on.
-        assert!(new_conversation_body("ws1", &folder, "note")
-            .unwrap_err()
-            .contains("needs an anchor note"));
     }
 
     /// The clamp is the point of the surface (#110), so it is pinned rather than
@@ -3318,22 +2013,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn inherited_breadth_resolves_per_tenant_for_a_workspace() {
-        // The workspace create path inherits breadth the same way as personal,
-        // scoped to the workspace tenant (issue #61 fix 2). "note" only when the
-        // Note has no prior session in that tenant.
-        let dir = tempfile::tempdir().unwrap();
-        let conn = db::open(&dir.path().join("wsbreadth.sqlite")).unwrap();
-        assert_eq!(inherited_breadth(&conn, "wsA", &ChatTarget::Note("n1".into())), "note", "first-ever session defaults to note");
-        let conv =
-            db::create_conversation(&conn, "wsA", CHAT_SCOPE_NOTE, "n1", "note").unwrap();
-        db::set_conversation_breadth(&conn, &conv.id, "all").unwrap();
-        assert_eq!(inherited_breadth(&conn, "wsA", &ChatTarget::Note("n1".into())), "all", "inherits the workspace session's breadth");
-        // A different tenant's breadth doesn't leak across.
-        assert_eq!(inherited_breadth(&conn, CHAT_TENANT_PERSONAL, &ChatTarget::Note("n1".into())), "note");
-    }
-
     /// A library-wide pane opens on an unsaved draft, a Note's pane resumes that
     /// Note's most-recent thread (#120, the divergence chosen deliberately).
     ///
@@ -3428,26 +2107,6 @@ mod tests {
         assert_eq!(resolved.id, existing.id, "a Note's bare send continues its thread");
     }
 
-    /// An empty pin string is normalised to "no pin" rather than stored (#120).
-    ///
-    /// The wire carries `""` for "off" in places, and a row storing `""` must read
-    /// identically to one that never had a pin — otherwise "pinned to nobody"
-    /// becomes a state that retrieval has to have an opinion about.
-    #[test]
-    fn a_drafts_blank_pin_is_no_pin_at_all() {
-        let dir = tempfile::tempdir().unwrap();
-        let conn = db::open(&dir.path().join("blankpin.sqlite")).unwrap();
-        let created = resolve_or_create(
-            &conn,
-            "wsA",
-            &ChatTarget::Global,
-            None,
-            DraftSettings { breadth: None, owner_filter: Some("   ".into()), ..Default::default() },
-        )
-        .unwrap();
-        assert_eq!(created.owner_filter, "", "whitespace is not a pin");
-    }
-
     /// Settings chosen on a draft — before any row exists — are applied to the
     /// conversation its first turn creates (#120, preserving #61 and #103).
     ///
@@ -3465,12 +2124,12 @@ mod tests {
             "wsA",
             &global,
             None,
-            DraftSettings { breadth: Some("all".into()), owner_filter: Some("u7".into()), ..Default::default() },
+            DraftSettings { breadth: Some("all".into()), client_filter: Some("c7".into()), ..Default::default() },
         )
         .unwrap();
         assert_eq!(created.breadth, "all");
         assert_eq!(
-            created.owner_filter, "u7",
+            created.client_filter, "c7",
             "a pin set before the first turn binds that turn — the #103 guarantee"
         );
 
@@ -3478,7 +2137,7 @@ mod tests {
         let plain =
             resolve_or_create(&conn, "wsB", &global, None, DraftSettings::default()).unwrap();
         assert_eq!(plain.breadth, "all");
-        assert_eq!(plain.owner_filter, "", "no pin unless one was chosen");
+        assert_eq!(plain.client_filter, "", "no pin unless one was chosen");
     }
 
     #[test]
@@ -3500,124 +2159,4 @@ mod tests {
         assert!(resolve_existing(&conn, CHAT_TENANT_PERSONAL, &ChatTarget::Note("n1".into()), Some("missing")).unwrap().is_none());
     }
 
-    #[test]
-    fn unlisted_legacy_handles_unions_only_the_server_omitted_remote_ids() {
-        // Legacy-merge core (issue #61 fix 5): surface local handles whose
-        // remote_id the server GET omitted, deduped by remote_id; skip handles
-        // already in the server list and handles with no remote_id (never sent).
-        fn handle(id: &str, remote: Option<&str>) -> db::Conversation {
-            db::Conversation {
-                id: id.to_string(),
-                scope: CHAT_SCOPE_NOTE.to_string(),
-                scope_id: "n1".to_string(),
-                tenant: "wsA".to_string(),
-                remote_id: remote.map(String::from),
-                breadth: "note".to_string(),
-                owner_filter: String::new(),
-                client_filter: String::new(),
-                speaker_filter: String::new(),
-                title: None,
-                created_at: 0,
-                updated_at: 0,
-            }
-        }
-        let local = vec![
-            handle("h_srv", Some("srv1")),  // already in server list → skip
-            handle("h_legacy", Some("srv2")), // server omitted → surface
-            handle("h_unsent", None),        // never sent (no remote_id) → skip
-        ];
-        let server_ids: std::collections::HashSet<String> = ["srv1".to_string()].into_iter().collect();
-        let unlisted = unlisted_legacy_handles(&server_ids, &local);
-        assert_eq!(unlisted.len(), 1, "only the server-omitted, remote-id'd handle");
-        assert_eq!(unlisted[0].id, "h_legacy");
-
-        // Empty server list → every remote-id'd handle is legacy; the unsent one
-        // is still skipped.
-        let none: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let unlisted = unlisted_legacy_handles(&none, &local);
-        let ids: Vec<&str> = unlisted.iter().map(|h| h.id.as_str()).collect();
-        assert_eq!(ids, vec!["h_srv", "h_legacy"]);
-    }
-
-    /// Cross-repo round-trip of a real workspace `chat_send` against a live
-    /// humla-cloud stack (issue #50, AC6), matching the env-gated shape of the
-    /// cloud-sync roundtrips: skipped unless the HUMLA_TEST_* vars point at a
-    /// booted server (PocketBase + chat-service + an LLM key). It authenticates,
-    /// POSTs `/api/chat`, and pumps the SSE stream through the SAME pure helpers
-    /// `stream_cloud_turn` uses — asserting the turn reaches a terminal `done`
-    /// and carries a conversation id. Plain `cargo test` (no env) skips it.
-    #[tokio::test]
-    async fn cloud_chat_roundtrip() {
-        use futures_util::StreamExt;
-        let (Ok(pb), Ok(chat), Ok(email), Ok(pass), Ok(ws)) = (
-            std::env::var("HUMLA_TEST_PB_URL"),
-            std::env::var("HUMLA_TEST_CHAT_URL"),
-            std::env::var("HUMLA_TEST_EMAIL"),
-            std::env::var("HUMLA_TEST_PASSWORD"),
-            std::env::var("HUMLA_TEST_WORKSPACE"),
-        ) else {
-            eprintln!("cloud_chat_roundtrip: skipped (set HUMLA_TEST_PB_URL/CHAT_URL/EMAIL/PASSWORD/WORKSPACE)");
-            return;
-        };
-        let client = reqwest::Client::new();
-
-        // 1. Authenticate against PocketBase for a real user token.
-        let auth: serde_json::Value = client
-            .post(format!("{pb}/api/collections/users/auth-with-password"))
-            .json(&serde_json::json!({ "identity": email, "password": pass }))
-            .send()
-            .await
-            .expect("auth send")
-            .json()
-            .await
-            .expect("auth json");
-        let token = auth.get("token").and_then(|t| t.as_str()).expect("token");
-
-        // 2. POST a workspace turn, built by the same request assembler the app uses.
-        let body = chat::cloud::build_cloud_request(
-            None,
-            &ws,
-            "In one sentence, what is this workspace about?",
-            Some("roundtrip test"),
-            chat::cloud::CloudScope {
-                breadth: "all",
-                note_id: Some("roundtrip-anchor"),
-                ..Default::default()
-            },
-        )
-        .expect("all-breadth request builds");
-        let resp = client
-            .post(format!("{}/api/chat", chat.trim_end_matches('/')))
-            .bearer_auth(token)
-            .json(&body)
-            .send()
-            .await
-            .expect("chat send");
-        assert!(resp.status().is_success(), "chat endpoint returned {}", resp.status());
-
-        // 3. Pump the SSE stream with the production helpers; assert we reach `done`.
-        let mut stream = resp.bytes_stream();
-        let mut buf: Vec<u8> = Vec::new();
-        let mut conversation_id: Option<String> = None;
-        let mut saw_done = false;
-        while let Some(chunk) = stream.next().await {
-            buf.extend_from_slice(&chunk.expect("chunk"));
-            while let Some((idx, delim)) = chat::cloud::find_event_end(&buf) {
-                let frame: Vec<u8> = buf.drain(..idx + delim).collect();
-                let text = String::from_utf8_lossy(&frame[..idx]);
-                let Some((event, data)) = chat::cloud::parse_sse_frame(&text) else { continue };
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
-                    if let Some(id) = v.get("conversationId").and_then(|c| c.as_str()) {
-                        conversation_id.get_or_insert_with(|| id.to_string());
-                    }
-                }
-                if event == "done" {
-                    saw_done = true;
-                }
-                assert_ne!(event, "error", "server streamed an error: {data}");
-            }
-        }
-        assert!(saw_done, "the turn never reached a terminal `done` event");
-        assert!(conversation_id.is_some(), "no conversation id was streamed");
-    }
 }

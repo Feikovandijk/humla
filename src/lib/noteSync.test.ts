@@ -98,7 +98,6 @@ describe("shouldRequestTitleForBody", () => {
     bodyText: "x".repeat(TITLE_MIN_BODY_CHARS),
     hasTranscript: false,
     recording: false,
-    readOnly: false,
   };
 
   it("titles a note that was typed and never recorded", () => {
@@ -126,9 +125,6 @@ describe("shouldRequestTitleForBody", () => {
     ).toBe(false);
   });
 
-  it("never fires on a note the user can't edit", () => {
-    expect(shouldRequestTitleForBody({ ...typed, readOnly: true })).toBe(false);
-  });
 });
 
 // The Rust side parses this shape with chrono, so a loose regex here would have

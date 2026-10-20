@@ -6,7 +6,6 @@ import { useNotesStore, useRecordingStore } from "../lib/store";
 import { indexById, matchesFilter, NO_FILTER, type NoteFilter } from "../lib/noteList";
 import { NoteCard, type SelectIntent } from "../components/NoteCard";
 import { NoteFilters } from "../components/NoteFilters";
-import { useCloudStore } from "../lib/cloud";
 import { BulkActionBar } from "../components/BulkActionBar";
 import { Modal } from "./settings/components/Modal";
 
@@ -19,7 +18,6 @@ export function AllNotes() {
   const removeLocal = useNotesStore((s) => s.removeLocal);
   const pushError = useRecordingStore((s) => s.pushError);
   const [filter, setFilter] = useState<NoteFilter>(NO_FILTER);
-  const myId = useCloudStore((s) => s.status.user?.id ?? null);
   const recorded = useNotesStore((s) => s.recordedNoteIds);
 
   // Multi-select (issue #19). `selected` holds note ids; `anchorRef` is the
@@ -40,9 +38,9 @@ export function AllNotes() {
   const filtered = useMemo(
     () =>
       sorted.filter((n) =>
-        matchesFilter(n, filter, { recorded: recorded.has(n.id), myId }),
+        matchesFilter(n, filter, { recorded: recorded.has(n.id) }),
       ),
-    [sorted, filter, recorded, myId],
+    [sorted, filter, recorded],
   );
   // Visual order of the currently-rendered cards — the source of truth for
   // Shift-click range selection.

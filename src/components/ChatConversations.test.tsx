@@ -18,7 +18,6 @@ function conversation(over: Partial<ConversationMeta> & { id: string }): Convers
   return {
     title: "Untitled",
     breadth: "all",
-    ownerFilter: "",
     clientFilter: "",
     speakerFilter: "",
     updatedAt: 1,

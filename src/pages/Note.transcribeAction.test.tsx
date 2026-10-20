@@ -176,37 +176,6 @@ describe("the transcript panel's re-transcribe control", () => {
     expect(retranscribeButton()).not.toBeInTheDocument();
   });
 
-  // It replaces text the note already has, and a viewer's write would be
-  // rejected by the server anyway.
-  it("stays hidden on a read-only note", async () => {
-    // `readOnly` comes off cloud status, not the note row: a workspace whose
-    // plan isn't live locks its notes for everyone.
-    const ws = { id: "w1", name: "Acme", role: "member" as const, plan_status: "none" as const };
-    await openTranscriptPanel(
-      [session({ canRetranscribe: true })],
-      {
-        cloud_status: () => ({
-          configured: true,
-          logged_in: true,
-          base_url: "https://sync.humla.team",
-          user: { id: "u1", email: "m@example.no", name: "Michael", verified: true },
-          current_workspace: ws,
-          workspaces: [ws],
-          billing_enabled: true,
-          seat_price_cents: 500,
-          seat_currency: "usd",
-        }),
-        cloud_workspace_members: () => [
-          { id: "u1", email: "m@example.no", name: "Michael", role: "member" },
-        ],
-      },
-      { transcript: TRANSCRIPT, workspace_id: "w1" },
-    );
-    // Copy is still there — reading is what read-only allows.
-    await screen.findByRole("button", { name: /^copy transcript$/i });
-    expect(retranscribeButton()).not.toBeInTheDocument();
-  });
-
   // It REPLACES a transcript, so on a note whose take was never transcribed it
   // would duplicate the toolbar's Transcribe under a tooltip that isn't true.
   // The toolbar owns that case; this control appears once there is text.
@@ -317,35 +286,6 @@ describe("the transcript panel's Transcribe action", () => {
     await openTranscriptPanel([session({ canTranscribe: false })]);
     await screen.findByText(/no transcript yet/i);
 
-    expect(transcribeButton()).not.toBeInTheDocument();
-  });
-
-  // Read-only hides it on both surfaces, so the copy must not point at a
-  // control that isn't there.
-  it("states the fact without offering the action on a read-only note", async () => {
-    const ws = { id: "w1", name: "Acme", role: "member" as const, plan_status: "none" as const };
-    await openTranscriptPanel(
-      [session({ canTranscribe: true })],
-      {
-        cloud_status: () => ({
-          configured: true,
-          logged_in: true,
-          base_url: "https://sync.humla.team",
-          user: { id: "u1", email: "m@example.no", name: "Michael", verified: true },
-          current_workspace: ws,
-          workspaces: [ws],
-          billing_enabled: true,
-          seat_price_cents: 500,
-          seat_currency: "usd",
-        }),
-        cloud_workspace_members: () => [
-          { id: "u1", email: "m@example.no", name: "Michael", role: "member" },
-        ],
-      },
-      { workspace_id: "w1" },
-    );
-
-    await screen.findByText(/hasn't been transcribed yet/i);
     expect(transcribeButton()).not.toBeInTheDocument();
   });
 });

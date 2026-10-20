@@ -40,19 +40,6 @@ export type Note = {
   detected_language: string | null;
   created_at: number;
   updated_at: number;
-  // Cloud sync: PocketBase user id of the note's creator. Empty for
-  // local-only / pre-sync notes. Resolved to a name (via the workspace member
-  // list) for "created by" attribution in shared workspaces.
-  owner: string;
-  // Cloud sync: which workspace this note belongs to. Empty = Personal /
-  // local-only (private to this device). Non-empty = shared with that
-  // workspace's members. Note lists are scoped to the active workspace.
-  workspace_id: string;
-  // Readable only by `owner`, inside the workspace it already belongs to (#191).
-  // Meaningless on a Personal note, which is private by definition. A shared note
-  // flipped private is WITHDRAWN from teammates: their local copy is deleted on
-  // their next pull, not merely hidden.
-  private: boolean;
   // Soft-delete timestamp (ms) when the note is in the Trash; null/absent = live.
   deleted_at?: number | null;
   // Optional Client tag (issue #43). null = untagged. Independent of folder_id.
@@ -76,8 +63,7 @@ export type Folder = {
   updated_at: number;
 };
 
-// A Client (issue #43): who a Note is about. Same shape as Folder on the wire;
-// workspace_id is backend-only and omitted here.
+// A Client (issue #43): who a Note is about. Same shape as Folder on the wire.
 export type Client = {
   id: string;
   name: string;
@@ -131,10 +117,6 @@ export type SettingsKey =
   | "transcribe_manually"
   // Hold a system-sleep power assertion while a capture runs (#180).
   | "keep_awake"
-  // Cloud/teams: upload a finished recording's audio to its workspace note
-  // so teammates can play it back. Default on; only the string "false"
-  // disables it on the upload path. Surfaced in the Account section.
-  | "sync_audio"
   | "custom_vocabulary"
   | "summary_model"
   // The Anthropic summary model (#183). Chat reuses `chat_model`, as OpenAI does.
@@ -373,13 +355,6 @@ export const ipc = {
   deleteNote: (id: string) => invoke<void>("notes_delete", { id }),
   moveNote: (id: string, folderId: string | null) =>
     invoke<void>("notes_move", { id, folderId }),
-  // Reassign a note to a workspace ("" = Personal/local-only).
-  setNoteWorkspace: (id: string, workspaceId: string) =>
-    invoke<void>("notes_set_workspace", { id, workspaceId }),
-  // Visibility inside the workspace (#191). Also banks the choice as that
-  // workspace's default for the next note.
-  setNotePrivate: (id: string, isPrivate: boolean) =>
-    invoke<void>("notes_set_private", { id, private: isPrivate }),
   // Trash (soft-delete) — list / restore / permanently delete.
   listTrashedNotes: () => invoke<Note[]>("notes_list_trash"),
   restoreNote: (id: string) => invoke<Note>("notes_restore", { id }),
@@ -469,41 +444,13 @@ export const ipc = {
   // is undoable from the note's history.
   transcribeNote: (noteId: string, scope: "pending" | "all") =>
     invoke<void>("transcribe_note", { noteId, scope }),
-  // Cloud audio sync: upload a finished recording to its workspace, or pull a
-  // shared note's audio down for local playback.
-  uploadNoteAudio: (noteId: string) => invoke<void>("cloud_upload_note_audio", { noteId }),
-  downloadNoteAudio: (noteId: string) => invoke<boolean>("cloud_download_note_audio", { noteId }),
-  // Per-session asset sync (#16): upload every take's assets after a recording
-  // / re-diarize, or pull a shared note's sessions (rebuilds sessions.json +
-  // fetches each take's playback + timeline). Returns true when sessions landed.
-  uploadNoteSessions: (noteId: string) => invoke<void>("cloud_upload_note_sessions", { noteId }),
-  downloadNoteSessions: (noteId: string) =>
-    invoke<boolean>("cloud_download_note_sessions", { noteId }),
-  // Opportunistic repair on note open: attach any per-session asset the server
-  // is missing, re-sending nothing it already has. Covers the post-recording
-  // upload never having run (app quit, network down) — without it, a stranded
-  // timeline is stranded for good and teammates never see the speaker labels.
-  repairNoteSessions: (noteId: string) =>
-    invoke<void>("cloud_repair_note_sessions", { noteId }),
-  // Who (if anyone) is currently recording a shared note. null = nobody, a
-  // Personal note, or the cloud isn't configured. Drives the recording-lock
-  // banner + disabled Record button so teammates don't record the same note.
-  noteRecordingStatus: (noteId: string) =>
-    invoke<RecordingLockStatus | null>("cloud_note_recording_status", { noteId }),
-  // The rename picker's two suggestion halves (#116): every distinct speaker
-  // label in the active workspace with usage counters, and the workspace member
-  // names. Fetched once per strip mount; ranking and filtering happen in TS
-  // (`lib/speakerSuggest.ts`). `speakerRoster` is best-effort by design and
-  // serves a cached roster when offline — unlike `cloudApi.workspaceMembers`,
-  // which member management needs to fail loudly.
+  // The rename picker's suggestions (#116): every distinct speaker label with
+  // usage counters. Fetched once per strip mount; ranking and filtering happen
+  // in TS (`lib/speakerSuggest.ts`).
   speakerLabelStats: () => invoke<SpeakerLabelStat[]>("speaker_label_stats"),
-  speakerRoster: () => invoke<string[]>("cloud_speaker_roster"),
   // The name to prefill when renaming the literal `You:` label (#116 part 2):
-  // `user_display_name` → workspace account name → macOS full name. The cloud
-  // name is passed in because the store already holds it, so the prefill never
-  // waits on the network.
-  speakerDefaultName: (cloudName: string | null) =>
-    invoke<string | null>("speaker_default_name", { cloudName }),
+  // `user_display_name` → macOS full name.
+  speakerDefaultName: () => invoke<string | null>("speaker_default_name"),
   // Restart the app. NOT `relaunch()` from @tauri-apps/plugin-process: Tauri
   // re-execs only after the `RunEvent::Exit` callback returns, and ours never
   // returns (it `_exit(0)`s past whisper.cpp's GGML Metal destructor), so the
@@ -656,9 +603,7 @@ export const ipc = {
   // returns the resolved `conversationId` so the panel learns which session it's
   // on; `chatSend` returns it too (lazy-creating on the first turn).
   //
-  // Chat is pinned to the loaded context (issue #58): the backend derives the
-  // tenant from the active workspace (Personal when none), so no call takes a
-  // tenant. Retrieval breadth ("note" | "folder" | "all") is persisted on the
+  // Retrieval breadth ("note" | "folder" | "all") is persisted on the
   // conversation server-side — `chatSetBreadth` writes it, `chatGetBreadth` reads
   // it back to initialise the Scope chip. `chatSend` carries no scope: it reads
   // the persisted breadth, so the UI can never diverge from it.
@@ -669,12 +614,7 @@ export const ipc = {
   // library-wide pane have none. An ABSENT id is what selects a note-less scope
   // and an EMPTY string is rejected, so these must be null and never "".
   //
-  // `ownerName` is a DISPLAY NAME for the pinned author (#103), used only in the
-  // prompt's disclosure line — the pinned *id* lives on the conversation row and
-  // is what actually filters. Sent from the roster the client already holds so
-  // the turn costs no extra lookup; null when there's no pin or no name for it.
-  //
-  // `draft` carries a library-wide pane's breadth + authorship pin when no
+  // `draft` carries a library-wide pane's breadth and pins when no
   // conversation exists yet (#120). A drafting pane deliberately persists nothing
   // until its first turn, so these are the only way settings chosen beforehand
   // reach the row this turn creates — and they are read ONLY on creation, since an
@@ -684,10 +624,8 @@ export const ipc = {
     target: ChatTarget,
     conversationId: string | null,
     message: string,
-    ownerName: string | null = null,
     draft: {
       breadth: ChatScope | null;
-      ownerFilter: string | null;
       clientFilter: string | null;
       speakerFilter: string | null;
     } | null = null,
@@ -696,9 +634,7 @@ export const ipc = {
       ...targetIds(target),
       conversationId,
       message,
-      ownerName,
       draftBreadth: draft?.breadth ?? null,
-      draftOwnerFilter: draft?.ownerFilter ?? null,
       draftClientFilter: draft?.clientFilter ?? null,
       draftSpeakerFilter: draft?.speakerFilter ?? null,
     }),
@@ -708,8 +644,7 @@ export const ipc = {
   chatCancel: (target: ChatTarget) => invoke<void>("chat_cancel", targetIds(target)),
   chatHistory: (target: ChatTarget, conversationId: string | null = null) =>
     invoke<ChatHistory>("chat_history", { ...targetIds(target), conversationId }),
-  // List / create chat sessions for a target (issue #61). Personal reads local
-  // SQLite; a workspace reads/creates server-authoritative sessions.
+  // List / create chat sessions for a target (issue #61).
   // `limit`/`offset` window the list, most-recent first (issue #95): `/chat`
   // lists conversations uncapped, so it pages them in as the sidebar scrolls.
   // Omitting `limit` returns everything, which is what the Note header's history
@@ -725,11 +660,8 @@ export const ipc = {
   // Delete / rename a conversation (issue #109). `conversationId` is REQUIRED on
   // both — unlike the read commands, neither falls back to "the active one", so a
   // missing id can't destroy or relabel whatever happens to be newest.
-  //
-  // In a workspace both go to the server first and abort if it refuses (only the
-  // thread's creator, or a workspace owner/admin, may do either). Delete is
-  // idempotent, so a retry after a partial failure is safe; rename returns the
-  // updated row so the caller doesn't have to re-list to see the new title.
+  // Delete is idempotent; rename returns the updated row so the caller doesn't
+  // have to re-list to see the new title.
   chatDeleteConversation: (target: ChatTarget, conversationId: string) =>
     invoke<void>("chat_delete_conversation", { ...targetIds(target), conversationId }),
   chatRenameConversation: (target: ChatTarget, conversationId: string, title: string) =>
@@ -740,17 +672,8 @@ export const ipc = {
     invoke<void>("chat_set_breadth", { ...targetIds(target), conversationId, breadth }),
   chatGetBreadth: (target: ChatTarget, conversationId: string | null = null) =>
     invoke<ChatScope>("chat_get_breadth", { ...targetIds(target), conversationId }),
-  // Persist / read the conversation's pinned authorship filter (#103) — a user
-  // id, or null/"" for off. Workspace-only: the backend rejects a pin in
-  // Personal, where every note is the user's own already.
-  chatSetOwnerFilter: (target: ChatTarget, conversationId: string | null, owner: string | null) =>
-    invoke<void>("chat_set_owner_filter", { ...targetIds(target), conversationId, owner }),
-  chatGetOwnerFilter: (target: ChatTarget, conversationId: string | null = null) =>
-    invoke<string>("chat_get_owner_filter", { ...targetIds(target), conversationId }),
   // Persist / read the conversation's pinned Client and speaker — null clears.
   // Mirrors `PinKind` in `commands/chat.rs` — change both.
-  // Not workspace-only, unlike the authorship pin above: a Personal library has
-  // both, and local retrieval applies them.
   //
   // The Client is an id; the speaker is the transcript label itself, since there
   // is no person entity to key on (ADR-0002).
@@ -762,15 +685,6 @@ export const ipc = {
   ) => invoke<void>("chat_set_pin", { ...targetIds(target), conversationId, kind, value }),
   chatGetPin: (target: ChatTarget, kind: ChatPinKind, conversationId: string | null = null) =>
     invoke<string>("chat_get_pin", { ...targetIds(target), conversationId, kind }),
-  // Workspace turn allowance for the composer meter (issue #69). null in personal
-  // context, and on any unavailable/error/unmetered outcome — a meter never
-  // errors the pane, so the caller just hides the display when this is null.
-  chatUsage: () => invoke<ChatUsage | null>("chat_usage"),
-  /** How the workspace's retrieval index looks to search, or null when there's no
-   *  information (Personal, an older server, or any failure — the caller keeps its
-   *  local guess). See #102: only the server can tell a backfilling index apart
-   *  from a genuinely empty library. */
-  chatIndexState: () => invoke<ChatIndexState | null>("chat_index_state"),
   // Rebuild a Note's retrieval index — called on Note-view unmount so edits
   // that didn't trigger summarize/diarize still land in search.
   chatReindexNote: (noteId: string) => invoke<void>("chat_reindex_note", { noteId }),
@@ -833,10 +747,6 @@ export type ConversationMeta = {
   id: string;
   title: string;
   breadth: ChatScope;
-  /** The pinned authorship filter's user id, or "" for off (#103). A user id
-   *  rather than a flag because a workspace's conversation list is shared: a
-   *  boolean would mean different notes to different readers of one thread. */
-  ownerFilter: string;
   /** The pinned Client's id, or "" for off. */
   clientFilter: string;
   /** The pinned speaker's transcript label, or "" for off. Already a display
@@ -850,15 +760,6 @@ export type ConversationMeta = {
 export type ChatScope = "note" | "folder" | "all";
 /** Which pin `chatSetPin` / `chatGetPin` act on. Mirrors Rust's `PinKind`. */
 export type ChatPinKind = "client" | "speaker";
-// Workspace turn allowance for the composer meter (issue #69). Only ever present
-// for a metered workspace; personal/unmetered/unavailable resolve to null.
-/** The server's view of a workspace's retrieval index (#102). "empty" covers both
- *  never-indexed and mid-backfill; "quarantined" is the indexer's deactivation
- *  grace window. */
-export type ChatIndexState = "ready" | "empty" | "quarantined";
-
-export type ChatUsage = { used: number; cap: number; periodEnd: number };
-
 // Streaming events (the #46 wire contract + #47 tool/citation events).
 export type ChatTextDeltaEvent = {
   conversationId: string;
@@ -899,7 +800,7 @@ export function onChatCitations(cb: (e: ChatCitationsEvent) => void): Promise<Un
 // row is finalised. The Note's ChatPanel drives completion off the chat_send
 // promise (it reloads history when the call resolves), so it doesn't subscribe
 // here — but the listener is part of the client's event surface for other
-// consumers (e.g. a future multi-pane view) and to mirror the cloud contract.
+// consumers (e.g. a future multi-pane view).
 export function onChatDone(cb: (e: ChatDoneEvent) => void): Promise<UnlistenFn> {
   return listen<ChatDoneEvent>("chat_done", (e) => cb(e.payload));
 }
@@ -1008,8 +909,6 @@ export type RecordingDiagnostic = {
   inputDevice: string | null;
 };
 // The teammate currently holding a shared note's recording lock.
-export type RecordingLockStatus = { holderId: string; holderName: string };
-
 export function onTranscript(cb: (e: TranscriptEvent) => void): Promise<UnlistenFn> {
   return listen<TranscriptEvent>("transcript_appended", (e) => cb(e.payload));
 }
@@ -1070,10 +969,8 @@ export function onParakeetDownloadError(
 ): Promise<UnlistenFn> {
   return listen<ParakeetDownloadError>("parakeet_download_error", (e) => cb(e.payload));
 }
-// "The notes table changed underneath you — refetch." Two emitters: the cloud
-// sync worker, after it applies pulled remote changes (only when sync is active
-// — cloud feature + signed in + a workspace selected), and any backend write
-// the UI never asked for — a menu-bar capture creating its note, the automatic
+// "The notes table changed underneath you — refetch." Emitted by any backend
+// write the UI never asked for — a menu-bar capture creating its note, the automatic
 // titler writing a title (#90).
 export function onNotesChanged(cb: () => void): Promise<UnlistenFn> {
   return listen("notes_changed", () => cb());
@@ -1088,17 +985,3 @@ export function onToggleRecord(cb: () => void): Promise<UnlistenFn> {
   return listen("menubar://toggle-record", () => cb());
 }
 
-// Coarse sync state from the cloud worker, for the sidebar indicator.
-// `signed_out`: the session ended and only signing in again restarts sync.
-// `two_factor_required`: the workspace requires two-factor authentication the
-// user hasn't set up, so the server refuses everything in it.
-export type SyncStatus = "syncing" | "idle" | "error" | "signed_out" | "two_factor_required";
-export function onSyncStatus(cb: (s: SyncStatus) => void): Promise<UnlistenFn> {
-  return listen<SyncStatus>("sync_status", (e) => cb(e.payload));
-}
-
-// A pull preserved local edits as a "(conflict copy)" instead of overwriting
-// them. Payload is the note title. The UI toasts it so the user can find the copy.
-export function onSyncConflict(cb: (title: string) => void): Promise<UnlistenFn> {
-  return listen<string>("sync_conflict", (e) => cb(e.payload));
-}

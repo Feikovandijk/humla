@@ -22,23 +22,14 @@ export type SpeakerLabelStat = {
 
 export type SpeakerSuggestion = {
   label: string;
-  /** `used` = a label somewhere in the library; `member` = a workspace member never labelled. */
-  kind: "used" | "member";
   /** Already a label on this note, so picking it merges rather than renames. */
   inNote: boolean;
 };
 
-/**
- * The two halves of the picker's suggestion source, as one value the strip is
- * handed. Neither half alone is right: most speakers are NOT workspace members
- * (a client's people are not your colleagues), but a member who joined a call
- * should be suggested before you've ever typed their name.
- */
+/** The picker's suggestion source, as one value the strip is handed. */
 export type SpeakerSuggestionSource = {
-  /** Distinct labels in the active workspace, from `ipc.speakerLabelStats()`. */
+  /** Distinct labels in the library, from `ipc.speakerLabelStats()`. */
   stats: SpeakerLabelStat[];
-  /** Workspace member display names, from `ipc.speakerRoster()`. */
-  roster: string[];
 };
 
 /** Rows shown at once. Small enough that the popover never covers the transcript. */
@@ -102,15 +93,12 @@ function matchRank(label: string, foldedQuery: string): number {
 export function suggestSpeakerLabels({
   query,
   stats,
-  roster = [],
   inNoteLabels = [],
   renaming,
 }: {
   query: string;
-  /** Distinct labels in the workspace, from `speaker_label_stats`. */
+  /** Distinct labels in the library, from `speaker_label_stats`. */
   stats: SpeakerLabelStat[];
-  /** Workspace member display names — suggestable before you've ever typed them. */
-  roster?: string[];
   /** Labels on the note being edited; picking one is a merge. */
   inNoteLabels?: string[];
   /** The label being renamed. Offering it back is a no-op. */
@@ -123,42 +111,31 @@ export function suggestSpeakerLabels({
   type Candidate = SpeakerSuggestion & { rank: number; count: number; recency: number };
   const byKey = new Map<string, Candidate>();
 
-  const add = (label: string, kind: "used" | "member", count: number, recency: number) => {
-    const key = foldLabel(label);
-    if (!key || skip.has(key) || isPlaceholderLabel(label)) return;
-    const rank = matchRank(label, foldedQuery);
-    if (rank === NO_MATCH) return;
-    const existing = byKey.get(key);
-    // A member you HAVE labelled is a used label, not a stranger — whichever
-    // source saw it first, `used` wins and the counters survive.
-    if (existing) {
-      if (kind === "used") {
-        existing.kind = "used";
-        existing.label = label;
-        existing.count = Math.max(existing.count, count);
-        existing.recency = Math.max(existing.recency, recency);
-      }
-      return;
-    }
-    byKey.set(key, { label, kind, inNote: inNote.has(key), rank, count, recency });
-  };
-
-  for (const s of stats) add(s.label, "used", s.note_count, s.last_used_at);
-  for (const name of roster) add(name, "member", 0, 0);
+  for (const s of stats) {
+    const key = foldLabel(s.label);
+    if (!key || skip.has(key) || isPlaceholderLabel(s.label) || byKey.has(key)) continue;
+    const rank = matchRank(s.label, foldedQuery);
+    if (rank === NO_MATCH) continue;
+    byKey.set(key, {
+      label: s.label,
+      inNote: inNote.has(key),
+      rank,
+      count: s.note_count,
+      recency: s.last_used_at,
+    });
+  }
 
   return [...byKey.values()]
     .sort(
       (a, b) =>
         a.rank - b.rank ||
-        // Ties break on note count, then recency. This also puts every label
-        // you've used ahead of every member you haven't, for free: a used label
-        // has at least one note and a bare roster entry has none.
+        // Ties break on note count, then recency.
         b.count - a.count ||
         b.recency - a.recency ||
         a.label.localeCompare(b.label),
     )
     .slice(0, MAX_SUGGESTIONS)
-    .map(({ label, kind, inNote }) => ({ label, kind, inNote }));
+    .map(({ label, inNote }) => ({ label, inNote }));
 }
 
 /**

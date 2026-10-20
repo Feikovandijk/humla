@@ -8,13 +8,12 @@
 //   - the record pre-flight gate (pages/Note.tsx's Record button).
 //
 // The gate/nag predicate is deliberately narrow: `pipelineReady = micGranted &&
-// stt.working`. Screen recording, AI summary, and cloud are ALL informational
+// stt.working`. Screen recording and AI summary are informational
 // only — they never gate recording (the spec: mic-only is a supported mode,
-// summary is optional, cloud never nags).
+// summary is optional).
 
 import { ipc, type TranscribeProvider } from "./ipc";
 import { chosenCloudProvider, isCloudProvider } from "./transcribeDefault";
-import { cloudApi } from "./cloud";
 
 // A model download the chip / recap can surface as "Downloading — NN%".
 // Sourced from the global download slice (store.ts), not recomputed here.
@@ -50,8 +49,6 @@ export type SetupStatus = {
   // Informational — never gates. (summaries are optional.)
   summaryConfigured: boolean;
   summaryProvider: string;
-  // Informational. Workspace name, or null when local-only / signed out.
-  cloudWorkspace: string | null;
   // The meeting language code (e.g. "no", "en", "auto").
   language: string;
   // THE nag/gate predicate: micGranted && stt.working.
@@ -133,24 +130,12 @@ export async function computeSetupStatus(): Promise<SetupStatus> {
     summaryConfigured = !!key;
   }
 
-  // ---- Cloud workspace (informational) ------------------------------------
-  // Read via the cloud command directly rather than the React store so this
-  // function has no store dependency and can run outside a component.
-  let cloudWorkspace: string | null = null;
-  try {
-    const status = await cloudApi.status();
-    cloudWorkspace = status.current_workspace?.name ?? null;
-  } catch {
-    cloudWorkspace = null;
-  }
-
   return {
     micGranted,
     screenGranted,
     stt,
     summaryConfigured,
     summaryProvider: effectiveSummaryProvider,
-    cloudWorkspace,
     language: language ?? "auto",
     pipelineReady: micGranted && stt.working,
   };

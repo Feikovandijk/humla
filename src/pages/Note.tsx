@@ -6,8 +6,6 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Building2,
   Calendar,
-  CircleCheck,
-  Eye,
   History,
   Check,
   ChevronDown,
@@ -19,7 +17,6 @@ import {
   FileText,
   Folder,
   Languages,
-  Lock,
   MessageCircle,
   MessageSquare,
   MoreHorizontal,
@@ -35,8 +32,6 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { SUMMARY_CAPABLE, type SummaryProvider } from "../lib/providers";
 import { useLiveSetting } from "../lib/settingsBus";
 import { useNotesStore, useRecordingStore } from "../lib/store";
-import { useOwnerName, useCloudStore } from "../lib/cloud";
-import { billingCta, planIsLive } from "../lib/billing";
 import { extractSpeakerLabels, renameSpeakerInTranscript } from "../lib/speakers";
 import { NEMOTRON_MAX_SPEAKERS } from "../lib/diarizeEngine";
 import { SPEAKER_COUNT_OPTIONS, speakerCountLabel } from "../lib/speakerCount";
@@ -47,14 +42,12 @@ import { RecordingSessions } from "../components/RecordingSessions";
 import {
   formatDuration,
   groupTimeline,
-  needsSessionPull,
   resolveActivePill,
   formatSessionCaption,
   sessionTitle,
   type TimelineGroup,
 } from "../lib/sessions";
 import { RecordingBar } from "../components/RecordingBar";
-import { NewWorkspaceModal } from "../components/NewWorkspaceModal";
 import { ChatPanel, type ChatSessionControls } from "../components/ChatPanel";
 import { SelectablePopover } from "../components/SelectablePopover";
 import {
@@ -203,12 +196,10 @@ const TITLE_BODY_SETTLE_MS = 10_000;
 export function NoteTitleBox({
   title,
   onChange,
-  readOnly,
   writing,
 }: {
   title: string;
   onChange: (value: string) => void;
-  readOnly: boolean;
   writing: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
@@ -262,7 +253,6 @@ export function NoteTitleBox({
       ref={ref}
       value={title}
       onChange={(e) => onChange(e.target.value)}
-      readOnly={readOnly}
       onKeyDown={(e) => {
         // Block Enter so the title behaves like a single-line conceptual field —
         // text still wraps when wider than the column, but the user can't
@@ -323,10 +313,9 @@ export function Note() {
   const { id } = useParams<{ id: string }>();
   const { sidebarCollapsed } = useOutletContext<LayoutOutletContext>();
   const upsert = useNotesStore((s) => s.upsertLocal);
-  const refreshNotes = useNotesStore((s) => s.refresh);
   const folders = useNotesStore((s) => s.folders);
   const note = useNotesStore((s) => s.notes.find((n) => n.id === id));
-  // Every note in the active workspace. `notes_list` includes each one's full
+  // Every note in the library. `notes_list` includes each one's full
   // transcript, so the cross-note rename (#116 part 2) needs no extra query to
   // find or count the notes it will rewrite.
   const allNotes = useNotesStore((s) => s.notes);
@@ -337,46 +326,6 @@ export function Note() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [revisions, setRevisions] = useState<NoteRevision[]>([]);
   const [restoreNonce, setRestoreNonce] = useState(0);
-  // "Created by" attribution — resolves to a name only when the note was
-  // authored by a teammate in the active workspace (null when it's yours,
-  // local, or unresolvable). Called unconditionally before the early return.
-  const ownerName = useOwnerName(draft?.owner ?? null);
-  // Name of the workspace this note is shared with (for the visibility row).
-  // Reads are workspace-scoped, so a note with a workspace_id belongs to the
-  // active one. Empty workspace_id = Private / local-only.
-  const sharedWorkspace = useCloudStore((s) => s.status.current_workspace?.name);
-  const activeWorkspaceId = useCloudStore((s) => s.status.current_workspace?.id ?? "");
-  const navigate = useNavigate();
-  // When signed in, the note's workspace becomes editable (move it between
-  // Personal and any workspace you belong to). Signed out → static row only.
-  const cloudLoggedIn = useCloudStore((s) => s.status.logged_in);
-  // Per-note sync state: true while this note has an unpushed change queued.
-  const notePending = useCloudStore((s) => (draft ? s.pendingNoteIds.has(draft.id) : false));
-  // Read-only when you're a viewer in THIS NOTE's workspace (derive the role
-  // from the note's own workspace_id, not the active workspace — a deep-linked
-  // or mid-switch note can belong to a different one).
-  const myWorkspaces = useCloudStore((s) => s.status.workspaces);
-  const billingEnabled = useCloudStore((s) => s.status.billing_enabled);
-  // Our own user id — to distinguish our recording lock from a teammate's.
-  const myUserId = useCloudStore((s) => s.status.user?.id);
-  const myName = useCloudStore((s) => s.status.user?.name ?? null);
-  const noteWs = draft?.workspace_id
-    ? myWorkspaces.find((w) => w.id === draft.workspace_id)
-    : undefined;
-  const isViewer = noteWs?.role === "viewer";
-  // On humla-cloud, a workspace with no active/trialing subscription is read-only
-  // until it's paid — the server blocks writes, so mirror that in the UI rather
-  // than letting edits look saved locally but silently fail to sync.
-  const lockedByPlan = billingEnabled && !!noteWs && !planIsLive(noteWs);
-  // The owner can resolve a plan lock from right here, so the banner offers the
-  // trial sheet instead of naming a Settings path to walk to.
-  const canFixPlan = lockedByPlan && noteWs?.role === "owner";
-  const readOnly = !!draft?.workspace_id && (isViewer || lockedByPlan);
-  // Mirror into a ref so the memoised patch callbacks can gate without changing
-  // identity (which would bust the transcript-view memos).
-  const readOnlyRef = useRef(readOnly);
-  readOnlyRef.current = readOnly;
-  const [billingOpen, setBillingOpen] = useState(false);
   const [uiLang, setUiLang] = useState<string>("en");
   const globalProvider = useLiveSetting("summary_provider") || "local";
   // Device-wide audio retention (#24). Off is the shipped default, so an
@@ -692,34 +641,6 @@ export function Note() {
     };
   }, [resizing]);
 
-  // Recording lock for shared notes: poll who is recording this note so we can
-  // show "X is recording…" and disable Record. Skipped for Personal notes and
-  // while WE are the active recorder (we hold the lock then, so the backend
-  // would just report ourselves). Cleared on any error → never blocks recording.
-  const [lockedBy, setLockedBy] = useState<{ holderId: string; holderName: string } | null>(null);
-  const noteWsId = draft?.workspace_id;
-  useEffect(() => {
-    if (!id || !noteWsId || isThisNoteActive) {
-      setLockedBy(null);
-      return;
-    }
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const s = await ipc.noteRecordingStatus(id);
-        if (cancelled) return;
-        setLockedBy(s && s.holderId !== myUserId ? s : null);
-      } catch {
-        if (!cancelled) setLockedBy(null);
-      }
-    };
-    poll();
-    const t = window.setInterval(poll, 10000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(t);
-    };
-  }, [id, noteWsId, isThisNoteActive, myUserId]);
 
   // Subscribe once per note id. Only append a delta if it belongs to this
   // note — defensive in case multiple summary calls are interleaved.
@@ -845,7 +766,6 @@ export function Note() {
         // the contention for the GPU (and for a local Ollama model's slot) that
         // keeping this out of a recording is for.
         recording: recPhase.noteId !== null,
-        readOnly,
       })
     ) {
       return;
@@ -858,7 +778,7 @@ export function Note() {
       void ipc.noteGenerateTitle(draft.id, false).catch(() => {});
     }, TITLE_BODY_SETTLE_MS);
     return () => window.clearTimeout(t);
-  }, [draft?.id, draft?.title, draft?.body, draft?.transcript, recPhase.noteId, readOnly]);
+  }, [draft?.id, draft?.title, draft?.body, draft?.transcript, recPhase.noteId]);
 
   // Re-fetch the playback bundle whenever the note id or recording
   // phase changes. The post-stop diarize step writes the bundle, so
@@ -872,42 +792,13 @@ export function Note() {
     if (!draft) return;
     let cancelled = false;
     (async () => {
-      let [path, tl, sess] = await Promise.all([
+      const [path, tl0, sess0] = await Promise.all([
         ipc.notePlaybackPath(draft.id).catch(() => null),
         ipc.noteTimeline(draft.id).catch((): TimelineEntry[] => []),
         ipc.noteSessions(draft.id).catch((): NoteSession[] => []),
       ]);
-      // Something's missing locally and the note is shared → pull it from the
-      // workspace. Prefer per-session sync (#16): rebuild sessions.json + fetch
-      // each take's playback/timeline. Fall back to the legacy single-file
-      // notes.audio for notes that predate sessions (or were uploaded by an old
-      // client).
-      //
-      // A MISSING TIMELINE is reason enough to ask, not just missing audio. The
-      // gate used to be `!path` alone, which had a trap: the legacy fallback
-      // writes a flat playback.wav and no timeline at all, so one visit through
-      // it left `path` non-null forever and the per-session pull — the only
-      // thing that fetches timelines — was never attempted again for that note.
-      // A teammate's note stayed permanently without word timings, and with
-      // them, without speaker labels.
-      if (
-        needsSessionPull({
-          shared: !!draft.workspace_id,
-          hasLocalPlayback: !!path,
-          timelineEntries: tl.length,
-        })
-      ) {
-        let got = await ipc.downloadNoteSessions(draft.id).catch(() => false);
-        // Only worth the legacy round-trip if we still have no audio at all.
-        if (!got && !path) {
-          got = await ipc.downloadNoteAudio(draft.id).catch(() => false);
-        }
-        if (got && !cancelled) {
-          path = await ipc.notePlaybackPath(draft.id).catch(() => null);
-          sess = await ipc.noteSessions(draft.id).catch(() => sess);
-          tl = await ipc.noteTimeline(draft.id).catch(() => tl);
-        }
-      }
+      let tl = tl0;
+      let sess = sess0;
       if (cancelled) return;
 
       // Repair before rendering (#169). Transcript text that no session
@@ -917,17 +808,6 @@ export function Note() {
       // of every one of those paths, since all four are UI actions on an
       // already-open note.
       //
-      // AFTER the session pull above, not before: a shared note whose
-      // timelines are still arriving would otherwise get a synthesized session
-      // for text the download was about to account for, and the words would
-      // land twice.
-      //
-      // Viewers repair too. The synthesized session is derived from the note's
-      // own transcript and written locally, so a read-only note is no less
-      // entitled to it — what a viewer skips is the upload, which the server
-      // would reject anyway. Skipping the call outright would leave a
-      // teammate's note on the turn list with text missing from it, which is
-      // the bug rather than a polite version of it.
       //
       // On failure the answer is "not covered", not "fine": a repair we
       // couldn't run is exactly when the turn list is most likely to be hiding
@@ -942,7 +822,6 @@ export function Note() {
       if (repair.repaired) {
         tl = await ipc.noteTimeline(draft.id).catch(() => tl);
         sess = await ipc.noteSessions(draft.id).catch(() => sess);
-        if (!readOnlyRef.current) void ipc.uploadNoteSessions(draft.id).catch(() => {});
         if (cancelled) return;
       }
       setTimelineCoversTranscript(repair.coversTranscript);
@@ -950,31 +829,16 @@ export function Note() {
       setPlaybackUrl(path ? convertFileSrc(path) : null);
       setTimeline(tl);
       setSessions(sess);
-      // The mirror image, for takes recorded HERE: re-attach any per-session
-      // asset the server never received. The post-recording upload is a single
-      // fire-and-forget call with no retry, so quitting the app (or a dropped
-      // network) inside the minute after a recording stranded the timeline on
-      // this device — the note synced, teammates got the text, and nobody ever
-      // got the speaker labels. Repairing on open costs one lookup and re-sends
-      // nothing the server already holds. Viewers skip it; the server would
-      // reject the write anyway.
-      if (draft.workspace_id && sess.length > 0 && !readOnlyRef.current) {
-        void ipc.repairNoteSessions(draft.id).catch(() => {});
-      }
     })();
     return () => {
       cancelled = true;
     };
-    // keepAudio is a dep so turning retention back on fetches a shared note's
-    // audio right away (#24) rather than on the next open. The backend enforces
-    // the rule; this only decides when to ask again.
-    //
     // isTranscribing is a dep for the same reason recPhase.phase is (#146): a
     // deferred transcription writes this note's timeline and flips its take to
     // transcribed, and it deliberately never touches the recording phase — so
     // without this the reader would keep rendering the pre-transcription
     // sessions until the user navigated away and back.
-  }, [draft?.id, draft?.workspace_id, recPhase.phase, keepAudio, isTranscribing, isRediarizing]);
+  }, [draft?.id, recPhase.phase, isTranscribing, isRediarizing]);
 
   // patch / patchProvider intentionally read from `draftRef.current`
   // rather than the `draft` closure so they can stay stable across
@@ -985,7 +849,6 @@ export function Note() {
     (field: "title" | "body" | "transcript" | "summary_preset" | "language", value: string) => {
       const cur = draftRef.current;
       if (!cur) return;
-      if (readOnlyRef.current) return; // viewer: no local edits (server rejects too)
       setDraft({ ...cur, [field]: value });
       queueSave(field, value);
     },
@@ -1015,7 +878,6 @@ export function Note() {
     (value: string) => {
       const cur = draftRef.current;
       if (!cur) return;
-      if (readOnlyRef.current) return; // viewer: read-only
       setDraft({ ...cur, summary_provider: value });
       queueSave("summary_provider", value);
     },
@@ -1058,7 +920,7 @@ export function Note() {
   // a transcript to label. Must stay ABOVE the `!draft` return below: a hook
   // after an early return changes the hook count as soon as a note loads.
   const speakerSuggestions = useSpeakerSuggestions(
-    !!draft && draft.transcript.trim().length > 0 && !readOnly,
+    !!draft && draft.transcript.trim().length > 0,
   );
 
   // How many OTHER notes carry each of this note's speaker labels (#116 part 2),
@@ -1104,19 +966,6 @@ export function Note() {
 
   if (!draft) return null;
 
-  // Who may move this note to another workspace: its creator, or a workspace
-  // owner/admin (who can reorganize). A plain member can't move a teammate's
-  // note out from under them (a move tombstones the shared copy for everyone).
-  // `owner` is empty for local/unsynced notes you just made — those are yours.
-  const noteWsRole = draft.workspace_id
-    ? myWorkspaces.find((w) => w.id === draft.workspace_id)?.role
-    : undefined;
-  const canMoveWorkspace =
-    !draft.owner ||
-    draft.owner === myUserId ||
-    noteWsRole === "owner" ||
-    noteWsRole === "admin";
-
   const hasSummary = draft.summary.trim().length > 0;
   const hasTranscript = draft.transcript.trim().length > 0;
   // Live-feed alignment: while a recording is in flight, pin the
@@ -1133,26 +982,16 @@ export function Note() {
   // single capture slot until the previous stop has landed on idle (#182), so
   // a stop that is still draining or diarizing disables this button for what
   // can be minutes.
-  const recordBlock = lockedBy
-    ? `${lockedBy.holderName} is recording this note`
-    : !otherActiveRecording
-      ? null
-      : recPhase.phase === "stopping" || recPhase.phase === "diarizing"
-        ? "Finishing the previous recording"
-        : "Another note is recording";
+  const recordBlock = !otherActiveRecording
+    ? null
+    : recPhase.phase === "stopping" || recPhase.phase === "diarizing"
+      ? "Finishing the previous recording"
+      : "Another note is recording";
   const transcriptLockReason = transcriptLockCopy({
     stopping: isStopping,
     diarizing: isDiarizing,
     importing: isImporting,
   });
-  const authorName = ownerName ?? myName ?? null;
-  // A note with no owner has never synced, so it is this device's own.
-  const isMine = !draft?.owner || draft.owner === myUserId;
-  const authorInitial = (authorName ?? "?").slice(0, 1).toUpperCase();
-  const noteWsName = draft.workspace_id
-    ? (noteWs?.name ?? sharedWorkspace ?? "Workspace")
-    : "Personal";
-  const wsInitial = noteWsName.slice(0, 1).toUpperCase();
 
   return (
     <div ref={columnsRef} className="h-full flex min-h-0">
@@ -1164,7 +1003,6 @@ export function Note() {
           noteId={draft.id}
           backTo={backTo}
           backLabel={backLabel}
-          readOnly={readOnly}
           recActive={recActive}
           recordBlock={recordBlock}
           panelOpen={panelOpen}
@@ -1183,51 +1021,6 @@ export function Note() {
               panelOpen ? "max-w-[640px]" : "max-w-[760px]",
             )}
           >
-        {readOnly && (
-          <div className="mb-4 flex items-center gap-2 px-3 py-2 rounded-md border border-[var(--color-line)] bg-[var(--color-pill-hover)] text-xs text-[var(--color-text-muted)]">
-            <Eye size={13} strokeWidth={1.5} className="shrink-0" />
-            <span className="flex-1">
-              {isViewer
-                ? "View-only — you have viewer access to this workspace, so this note can’t be edited."
-                : !canFixPlan
-                  ? "Read-only — this workspace needs an active subscription. Ask the workspace owner to start it."
-                  : noteWs?.plan_status === "past_due"
-                    ? "Read-only — a payment for this workspace didn’t go through, so nothing syncs and nobody can edit."
-                    : "Read-only until this workspace’s plan is live — nothing syncs and nobody can edit."}
-            </span>
-            {canFixPlan && (
-              <button
-                type="button"
-                onClick={() => setBillingOpen(true)}
-                className="shrink-0 font-medium text-[var(--color-accent-text)] hover:underline"
-              >
-                {/* Shared with the sheet's own CTA: a third hand-rolled cascade
-                    on plan_status is how "past_due opens the Portal, not a
-                    second Checkout" drifts out of true in one of them. */}
-                {noteWs ? billingCta(noteWs).label : "Subscribe"}
-              </button>
-            )}
-          </div>
-        )}
-        {!readOnly && lockedBy && (
-          <div className="mb-4 flex items-center gap-2 px-3 py-2 rounded-md border border-[var(--color-line)] bg-[var(--color-pill-hover)] text-xs text-[var(--color-text-muted)]">
-            <Circle size={9} fill="currentColor" strokeWidth={0} className="shrink-0 rec-dot text-[var(--color-record)]" />
-            <span>
-              <strong className="font-medium text-[var(--color-text)]">{lockedBy.holderName}</strong> is recording this note. Only one person can record a shared note at a time — the transcript will sync here when they stop.
-            </span>
-          </div>
-        )}
-        {/* Deliberately outside the banner's own condition: a completed checkout
-            makes this note writable, which unmounts the banner — and with it
-            would go the sheet, one stage before it offers the first invite. */}
-        {noteWs && (
-          <NewWorkspaceModal
-            open={billingOpen}
-            onClose={() => setBillingOpen(false)}
-            workspaceId={noteWs.id}
-            source="note_banner"
-          />
-        )}
         {/* A title is being written for this note. Standing in for the box
             rather than dimming it says the right thing — the text there is
             about to be replaced, so showing it fading is showing the wrong
@@ -1237,84 +1030,11 @@ export function Note() {
         <NoteTitleBox
           title={draft.title}
           onChange={(v) => patch("title", v)}
-          readOnly={readOnly}
           writing={isTitling}
         />
 
         <div className="mb-8 pb-4 border-b border-[var(--color-line)]">
           <div className="flex flex-wrap items-center gap-1 -mx-2">
-          {authorName && (
-            <span className="nd-meta" style={{ color: "var(--color-text)" }}>
-              <span
-                className="grid place-items-center w-[18px] h-[18px] rounded-full text-[9.5px] font-semibold"
-                style={{ background: "var(--color-accent)", color: "var(--color-on-accent)" }}
-              >
-                {authorInitial}
-              </span>
-              <span className="font-medium">{authorName}</span>
-            </span>
-          )}
-          {cloudLoggedIn ? (
-            <WorkspacePicker
-              value={draft.workspace_id}
-              disabled={readOnly || !canMoveWorkspace}
-              badge={
-                <span
-                  className="grid place-items-center w-[17px] h-[17px] rounded-[5px] text-[9px] font-semibold"
-                  style={{ background: "var(--color-surface-raised)", color: "var(--color-text)" }}
-                >
-                  {wsInitial}
-                </span>
-              }
-              onChange={async (workspaceId) => {
-                if (!draft || readOnly || !canMoveWorkspace || workspaceId === draft.workspace_id) return;
-                // A note moved out of the active workspace is no longer in any
-                // list this view belongs to, so the view leaves with it.
-                const leaving = workspaceId !== activeWorkspaceId;
-                await flushSave().catch(warnSaveFailed);
-                await ipc.setNoteWorkspace(draft.id, workspaceId);
-                if (leaving) {
-                  const dest = workspaceId
-                    ? (myWorkspaces.find((w) => w.id === workspaceId)?.name ?? "another workspace")
-                    : "Personal";
-                  const title = draft.title.trim();
-                  navigate(backTo);
-                  useRecordingStore
-                    .getState()
-                    .pushFlash(title ? `Moved “${title}” to ${dest}` : `Moved note to ${dest}`);
-                } else {
-                  // The backend drops the folder and client with the move.
-                  setDraft({ ...draft, workspace_id: workspaceId, folder_id: null, client_id: null });
-                }
-                await refreshNotes();
-              }}
-            />
-          ) : (
-            draft.workspace_id && (
-              <span className="nd-meta">
-                <span
-                  className="grid place-items-center w-[17px] h-[17px] rounded-[5px] text-[9px] font-semibold"
-                  style={{ background: "var(--color-surface-raised)", color: "var(--color-text)" }}
-                >
-                  {wsInitial}
-                </span>
-                <span>{sharedWorkspace ?? "your workspace"}</span>
-              </span>
-            )
-          )}
-          {draft.workspace_id && isMine && (
-            <VisibilityPicker
-              value={draft.private}
-              disabled={readOnly}
-              onChange={async (isPrivate) => {
-                if (!draft || readOnly || isPrivate === draft.private) return;
-                const next = { ...draft, private: isPrivate };
-                setDraft(next);
-                await ipc.setNotePrivate(draft.id, isPrivate);
-                upsert(next);
-              }}
-            />
-          )}
           <span className="nd-meta">
             <Calendar size={14} strokeWidth={1.7} />
             {dateChip}
@@ -1322,7 +1042,7 @@ export function Note() {
           <FolderPicker
             value={draft.folder_id}
             onChange={async (folderId) => {
-              if (!draft || readOnly) return;
+              if (!draft) return;
               const next = { ...draft, folder_id: folderId };
               setDraft(next);
               await ipc.moveNote(draft.id, folderId);
@@ -1332,7 +1052,7 @@ export function Note() {
           <ClientPicker
             value={draft.client_id ?? null}
             onChange={async (clientId) => {
-              if (!draft || readOnly) return;
+              if (!draft) return;
               const next = { ...draft, client_id: clientId };
               setDraft(next);
               await ipc.setNoteClient(draft.id, clientId);
@@ -1358,11 +1078,6 @@ export function Note() {
                 ? "Identifying speakers"
                 : "Recording"}
             </span>
-          ) : draft.workspace_id ? (
-            <span className="nd-meta" style={{ color: "var(--color-success)" }}>
-              <CircleCheck size={14} strokeWidth={1.7} style={{ opacity: 1 }} />
-              {notePending ? "Syncing…" : "Synced"}
-            </span>
           ) : null}
           </div>
         </div>
@@ -1371,7 +1086,7 @@ export function Note() {
           key={draft.id}
           initialHTML={initialBody}
           onChange={(html) => patch("body", html)}
-          editable={!readOnly}
+          editable
         />
 
         <div className="mt-6 border-t border-[var(--color-line)] pt-3">
@@ -1408,20 +1123,18 @@ export function Note() {
                     <span className="flex-1 truncate text-[var(--color-text)]">
                       {rev.title.trim() || "Untitled"}
                     </span>
-                    {!readOnly && (
-                      <button
-                        onClick={async () => {
-                          const updated = await ipc.restoreNoteRevision(draft.id, rev.id);
-                          setDraft(updated);
-                          upsert(updated);
-                          setRestoreNonce((n) => n + 1);
-                          setRevisions(await ipc.noteRevisions(draft.id).catch(() => []));
-                        }}
-                        className="shrink-0 text-[var(--color-interactive)] hover:underline"
-                      >
-                        Restore
-                      </button>
-                    )}
+                    <button
+                      onClick={async () => {
+                        const updated = await ipc.restoreNoteRevision(draft.id, rev.id);
+                        setDraft(updated);
+                        upsert(updated);
+                        setRestoreNonce((n) => n + 1);
+                        setRevisions(await ipc.noteRevisions(draft.id).catch(() => []));
+                      }}
+                      className="shrink-0 text-[var(--color-interactive)] hover:underline"
+                    >
+                      Restore
+                    </button>
                   </div>
                 ))
               )}
@@ -1431,9 +1144,7 @@ export function Note() {
 
           </div>
         </div>
-        {!readOnly && (
-          <RecordingBar noteId={draft.id} />
-        )}
+        <RecordingBar noteId={draft.id} />
       </div>
 
       <aside
@@ -1539,17 +1250,15 @@ export function Note() {
                   />
                   <div className="ml-auto flex items-center gap-0.5">
                     {hasSummary && <CopyButton label="Summary" getText={() => draft.summary} />}
-                    {!readOnly && (
-                      <button
-                        type="button"
-                        onClick={() => void runSummarize(draft.id, clearSummaryStream)}
-                        title="Regenerate summary"
-                        aria-label="Regenerate summary"
-                        className="nd-btn-icon nd-btn-icon-sm"
-                      >
-                        <RefreshCw size={15} strokeWidth={1.6} />
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => void runSummarize(draft.id, clearSummaryStream)}
+                      title="Regenerate summary"
+                      aria-label="Regenerate summary"
+                      className="nd-btn-icon nd-btn-icon-sm"
+                    >
+                      <RefreshCw size={15} strokeWidth={1.6} />
+                    </button>
                   </div>
                 </div>
 
@@ -1607,22 +1316,20 @@ export function Note() {
                 {cleanText && (
                   <div className="flex items-center justify-end gap-0.5 mb-4 shrink-0">
                     <CopyButton label="Clean transcript" getText={() => cleanText} />
-                    {!readOnly && (
-                      <button
-                        type="button"
-                        onClick={() => void runClean(draft.id)}
-                        disabled={cleaningId === draft.id || recActive || !hasTranscript}
-                        title="Clean up the transcript again, replacing this copy"
-                        aria-label="Regenerate clean transcript"
-                        className="nd-btn-icon nd-btn-icon-sm"
-                      >
-                        <RefreshCw
-                          size={15}
-                          strokeWidth={1.6}
-                          className={cleaningId === draft.id ? "animate-spin" : undefined}
-                        />
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => void runClean(draft.id)}
+                      disabled={cleaningId === draft.id || recActive || !hasTranscript}
+                      title="Clean up the transcript again, replacing this copy"
+                      aria-label="Regenerate clean transcript"
+                      className="nd-btn-icon nd-btn-icon-sm"
+                    >
+                      <RefreshCw
+                        size={15}
+                        strokeWidth={1.6}
+                        className={cleaningId === draft.id ? "animate-spin" : undefined}
+                      />
+                    </button>
                   </div>
                 )}
                 {cleaningId === draft.id ? (
@@ -1645,7 +1352,7 @@ export function Note() {
                         : "No transcript to clean up yet."
                     }
                     action={
-                      hasTranscript && !readOnly ? (
+                      hasTranscript ? (
                         <button
                           type="button"
                           onClick={() => void runClean(draft.id)}
@@ -1669,7 +1376,7 @@ export function Note() {
                   <SpeakersPicker
                     value={draft.expected_speakers}
                     onChange={async (n) => {
-                      if (!draft || readOnly) return;
+                      if (!draft) return;
                       const next = { ...draft, expected_speakers: n };
                       setDraft(next);
                       await ipc.updateNote(draft.id, { expected_speakers: n });
@@ -1706,7 +1413,7 @@ export function Note() {
 
                           Ordered by how much each changes: copy, then add the
                           missing take, then replace every take's text. */}
-                      {!readOnly && pendingTranscription && (
+                      {pendingTranscription && (
                         <button
                           type="button"
                           onClick={() => void runTranscribe(draft.id, "pending")}
@@ -1718,7 +1425,7 @@ export function Note() {
                           <FileText size={15} strokeWidth={1.6} />
                         </button>
                       )}
-                      {!readOnly && canRetranscribe && (
+                      {canRetranscribe && (
                         <button
                           type="button"
                           onClick={() => void runTranscribe(draft.id, "all")}
@@ -1754,7 +1461,7 @@ export function Note() {
                     <TranscriptPlayer
                       noteId={draft.id} timeline={[]} setTimeline={setTimeline}
                       sessions={sessions} fallbackPlaybackUrl={playbackUrl}
-                      audioAvailable keepAudio={keepAudio} disabled={readOnly}
+                      audioAvailable keepAudio={keepAudio} disabled={false}
                       bottomAligned={false}
                     />
                   )}
@@ -1764,14 +1471,11 @@ export function Note() {
                     <div className="shrink-0">
                       <SpeakerLabels
                         transcript={draft.transcript}
-                        readOnly={readOnly}
                         suggestions={speakerSuggestions}
                         otherNotesWithLabel={otherNotesWithLabel}
                         onRenameEverywhere={(oldLabel, newLabel) => {
-                          if (readOnlyRef.current) return;
                           // This note included, through the same per-note path a
-                          // single rename takes — one rewrite implementation, and
-                          // `notes_update` pings the sync observer correctly.
+                          // single rename takes — one rewrite implementation.
                           // Undo comes free: `db::update_note` snapshots a
                           // revision on every transcript change.
                           void renameSpeakerAcrossNotes({
@@ -1801,7 +1505,6 @@ export function Note() {
                           });
                         }}
                         onRename={(oldLabel, newLabel) => {
-                          if (readOnlyRef.current) return;
                           patch("transcript", renameSpeakerInTranscript(draft.transcript, oldLabel, newLabel));
                           setCleanText((t) => renameSpeakerInTranscript(t, oldLabel, newLabel));
                           void renameInCleanTranscript(draft.id, oldLabel, newLabel).catch((e) =>
@@ -1812,17 +1515,10 @@ export function Note() {
                           );
                           ipc
                             .noteTimelineRename(draft.id, oldLabel, newLabel)
-                            .then(() => {
-                              // Re-upload the rewritten timelines for shared
-                              // notes (#16); a no-op for Personal notes.
-                              void ipc.uploadNoteSessions(draft.id);
-                            })
                             .catch((err) => console.error("noteTimelineRename failed", err));
                         }}
                       />
-                      {!readOnly && (
-                        <RediarizeAction noteId={draft.id} keepAudio={keepAudio} />
-                      )}
+                      <RediarizeAction noteId={draft.id} keepAudio={keepAudio} />
                       {devMode && <DiagnosticsLinks noteId={draft.id} />}
                     </div>
                     {/* The styled reader is driven by the timeline, not by the
@@ -1864,7 +1560,7 @@ export function Note() {
                           !!playbackUrl || sessions.some((s) => s.hasPlayback)
                         }
                         keepAudio={keepAudio}
-                        disabled={readOnly || recActive}
+                        disabled={recActive}
                         fill
                         bottomAligned={transcriptLive}
                       />
@@ -1872,7 +1568,7 @@ export function Note() {
                       <TranscriptEditor
                         value={draft.transcript}
                         onChange={onTranscriptChange}
-                        disabled={readOnly || recActive}
+                        disabled={recActive}
                         disabledReason={transcriptLockReason}
                         fill
                         bottomAligned={transcriptLive}
@@ -1908,7 +1604,7 @@ export function Note() {
                       // in-flight indicator, so `isTranscribing` is never true
                       // while the button is on screen. `recActive` can't be
                       // either, for the same reason.
-                      pendingTranscription && !readOnly ? (
+                      pendingTranscription ? (
                         <button
                           type="button"
                           onClick={() => void runTranscribe(draft.id, "pending")}
@@ -1998,13 +1694,12 @@ function formatElapsed(s: number) {
 
 // Note toolbar — back link, primary actions (Record / Summarize), the
 // context-panel toggle, and an overflow menu. Replaces the old cryptic
-// copy/refresh/more icon row. Record + Summarize appear only when idle
-// (not readOnly); during a recording the floating bar takes over.
+// copy/refresh/more icon row. Record + Summarize appear only when idle;
+// during a recording the floating bar takes over.
 export function NoteToolbar({
   noteId,
   backTo,
   backLabel,
-  readOnly,
   recActive,
   recordBlock,
   panelOpen,
@@ -2019,7 +1714,6 @@ export function NoteToolbar({
   noteId: string;
   backTo: string;
   backLabel: string;
-  readOnly: boolean;
   recActive: boolean;
   recordBlock: string | null;
   panelOpen: boolean;
@@ -2060,15 +1754,9 @@ export function NoteToolbar({
   // Send to webhook (#213) sits beside Export in this menu, not in the bar: it
   // is opt-in, so a button would spend the bar's width on something most users
   // never turn on, and it is the same act as Export (a note leaving the app).
-  // Inside the menu it is also gated on `readOnly` the way Export is.
   const webhookEnabled = useLiveSetting("webhook_enabled") === "true";
   const sendingToWebhook = useWebhookSends((s) => !!s.sending[noteId]);
   const [webhookOpen, setWebhookOpen] = useState(false);
-  // The export sheet's team hint opens this. Deliberately NOT the same instance
-  // as the read-only banner's in `Note` above: that one rescues the workspace a
-  // note already belongs to and only exists when there is one, while the hint
-  // only ever shows on Personal, where there is nothing to rescue.
-  const [teamHintOpen, setTeamHintOpen] = useState(false);
 
   async function record() {
     // The backend checks both offered languages and microphone permission.
@@ -2128,7 +1816,7 @@ export function NoteToolbar({
         <span className={BACK_LABEL}>{backLabel}</span>
       </Link>
       <div className="flex-1" />
-      {!readOnly && !recActive && (
+      {!recActive && (
         <>
           <button
             onClick={record}
@@ -2177,11 +1865,9 @@ export function NoteToolbar({
       >
         <PanelRight size={16} strokeWidth={1.7} />
       </button>
-      {!readOnly && (
-        <button onClick={openMenu} className="no-drag nd-btn-icon" title="More" aria-label="More">
-          <MoreHorizontal size={16} strokeWidth={1.7} />
-        </button>
-      )}
+      <button onClick={openMenu} className="no-drag nd-btn-icon" title="More" aria-label="More">
+        <MoreHorizontal size={16} strokeWidth={1.7} />
+      </button>
       {menuPos && (
         <ContextMenu x={menuPos.x} y={menuPos.y} onClose={() => setMenuPos(null)}>
           {note && (
@@ -2225,7 +1911,6 @@ export function NoteToolbar({
           open={exportOpen}
           onClose={() => setExportOpen(false)}
           flushEdits={flushEdits}
-          onCreateTeam={() => setTeamHintOpen(true)}
         />
       )}
       {note && (
@@ -2236,13 +1921,6 @@ export function NoteToolbar({
           flushEdits={flushEdits}
         />
       )}
-      {/* Outside the ExportModal above on purpose: the hint closes that modal on
-          its way here, which would take a sheet rendered inside it along. */}
-      <NewWorkspaceModal
-        open={teamHintOpen}
-        onClose={() => setTeamHintOpen(false)}
-        source="team_hint_export"
-      />
     </div>
   );
 }
@@ -2327,47 +2005,6 @@ function CtlSelect({
               </MenuRadioItem>
             </Fragment>
           ))}
-        </MenuRadioGroup>
-      </MenuContent>
-    </Menu>
-  );
-}
-
-/** Visibility inside a workspace (#191).
- *
- *  Rendered only for a note that has a workspace AND that the reader wrote. A
- *  Personal note is private by definition, and on someone else's note this is not
- *  the reader's call to make — not even a workspace owner's, or the word means
- *  nothing. The server refuses the write either way; this is the surface agreeing
- *  with it rather than offering a control that fails.
- */
-function VisibilityPicker({
-  value,
-  disabled,
-  onChange,
-}: {
-  value: boolean;
-  disabled?: boolean;
-  onChange: (isPrivate: boolean) => void;
-}) {
-  return (
-    <Menu>
-      <MenuTrigger
-        className="nd-meta is-interactive"
-        disabled={disabled}
-        title={value ? "Only you can read this note" : "Everyone in the workspace can read this note"}
-        aria-label="Visibility"
-      >
-        {value ? <Lock size={14} strokeWidth={1.7} /> : <Users size={14} strokeWidth={1.7} />}
-        <span>{value ? "Private" : "Shared"}</span>
-      </MenuTrigger>
-      <MenuContent aria-label="Visibility">
-        <MenuRadioGroup
-          value={value ? "private" : "shared"}
-          onValueChange={(v) => onChange(v === "private")}
-        >
-          <MenuRadioItem value="shared">Shared</MenuRadioItem>
-          <MenuRadioItem value="private">Private</MenuRadioItem>
         </MenuRadioGroup>
       </MenuContent>
     </Menu>
@@ -2464,57 +2101,6 @@ function ClientPicker({
         // (the backend already un-tagged it during delete).
         if (value === id) onChange(null);
       }}
-    />
-  );
-}
-
-// Move a note between Personal (local-only) and any workspace you belong to.
-// Only rendered when signed in (workspaces exist). "Personal" is the none row
-// of the shared picker (#114); the chip's workspace-initial badge rides along
-// inside the trigger so the whole chip stays clickable.
-function WorkspacePicker({
-  value,
-  onChange,
-  badge,
-  disabled = false,
-}: {
-  value: string;
-  onChange: (workspaceId: string) => void;
-  badge: React.ReactNode;
-  disabled?: boolean;
-}) {
-  const workspaces = useCloudStore((s) => s.status.workspaces);
-  const label = value
-    ? (workspaces.find((w) => w.id === value)?.name ?? "Workspace")
-    : "Personal (this device)";
-
-  // Locked: show the workspace as plain text rather than an editable dropdown.
-  // Used when the current user isn't allowed to move this note (not its creator
-  // and not a workspace admin) or the note is otherwise read-only.
-  if (disabled) {
-    return (
-      <span
-        className="nd-meta text-[var(--color-text-muted)]"
-        title="Only the note’s creator or a workspace admin can move it to another workspace."
-      >
-        {badge}
-        {value ? (workspaces.find((w) => w.id === value)?.name ?? "a workspace") : label}
-      </span>
-    );
-  }
-  return (
-    <SelectablePopover
-      ariaLabel="Workspace"
-      trigger={
-        <span className="nd-meta is-interactive">
-          {badge}
-          <span className="truncate" style={{ maxWidth: 150 }}>{label}</span>
-        </span>
-      }
-      items={workspaces.map((w) => ({ id: w.id, label: w.name }))}
-      activeId={value || null}
-      onSelect={(id) => onChange(id ?? "")}
-      noneLabel="Personal (this device)"
     />
   );
 }
@@ -3554,9 +3140,6 @@ export const TranscriptPlayer = memo(function TranscriptPlayer({
         console.error("noteTimelineDeleteChunk failed", err);
       }
     }
-    // Push the rewritten session timelines to the workspace (#16); Personal
-    // notes short-circuit in the backend.
-    void ipc.uploadNoteSessions(noteId);
     useRecordingStore
       .getState()
       .pushFlash(g.indices.length === 1 ? "Line deleted" : "Turn deleted");
@@ -3588,8 +3171,6 @@ export const TranscriptPlayer = memo(function TranscriptPlayer({
         console.error("noteTimelineSetChunkLabel failed", err);
       }
     }
-    // Sync the relabelled session timelines (#16); no-op for Personal notes.
-    void ipc.uploadNoteSessions(noteId);
   }
 
   // Rewrite one turn's text (#170). The edit lands in the timeline — the
@@ -3625,9 +3206,6 @@ export const TranscriptPlayer = memo(function TranscriptPlayer({
     } catch (err) {
       console.error("noteTimelineSetChunkText failed", err);
     }
-    // Push the rewritten session timeline to the workspace (#16), or a
-    // teammate keeps the pre-edit text; Personal notes short-circuit.
-    void ipc.uploadNoteSessions(noteId);
   }
 
   return (
@@ -4151,9 +3729,6 @@ function RediarizeAction({
     setError(null);
     try {
       await ipc.rediarizeNote(noteId);
-      // Re-diarize rewrote the session timelines — push them to the
-      // workspace (#16); a no-op for Personal notes.
-      void ipc.uploadNoteSessions(noteId);
     } catch (e) {
       setError(String(e));
     } finally {

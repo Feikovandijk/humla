@@ -20,9 +20,6 @@ export function makeNote(overrides: Partial<Note> & { id: string }): Note {
     detected_language: null,
     created_at: 0,
     updated_at: 0,
-    owner: "",
-    workspace_id: "",
-    private: false,
     ...overrides,
   };
 }

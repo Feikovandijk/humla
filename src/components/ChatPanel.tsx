@@ -17,7 +17,6 @@ import {
   Plus,
   Settings2,
   Square,
-  UserRound,
   X,
 } from "lucide-react";
 import {
@@ -30,21 +29,15 @@ import {
   type ChatMessageDto,
   type ChatPinKind,
   type ChatScope,
-  type ChatIndexState,
-  ChatUsage,
   type ConversationMeta,
 } from "../lib/ipc";
 import { useNotesStore } from "../lib/store";
-import { cloudApi, formatSeatPrice, useCloudStore, useMemberName, type ChatAddon, type ChatKeyMeta } from "../lib/cloud";
 import { useChatReadiness } from "./provider/useChatReadiness";
 import { SelectablePopover, type PopoverItem } from "./SelectablePopover";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover";
 import { Combobox, type ComboboxOption } from "./ui/Combobox";
 import { suggestSpeakerLabels, type SpeakerSuggestionSource } from "../lib/speakerSuggest";
-import { ChatKeyEntry } from "./ChatKeyEntry";
 import {
-  usageTone,
-  liveChatErrorCopy,
   groundingLikelyTruncated,
   conversationTitle,
 } from "../lib/chatSessions";
@@ -192,8 +185,7 @@ export type ChatSessionControls = {
    *
    *  Published rather than re-derived: `useChatReadiness` polls a local Ollama
    *  server every 2s, so a second caller would double that probe to show one
-   *  label. Null in a workspace, where the turn runs on the SERVER's model and
-   *  this local setting would name something that isn't answering (#80). */
+   *  label. */
   status: { provider: string; model: string } | null;
 };
 
@@ -245,9 +237,8 @@ export function ChatPanel({
   } = useChatReadiness();
   const [messages, setMessages] = useState<ChatMessageDto[]>([]);
   // This Note's conversations (issue #61/#62), most-recent first from the
-  // backend (local rows in Personal; server list merged in a workspace). Feeds
-  // the history popover and the history-visibility rule. Reset to [] on note /
-  // workspace switch so the header hides until the fresh list is known.
+  // backend. Feeds the history popover and the history-visibility rule. Reset to
+  // [] on note switch so the header hides until the fresh list is known.
   const [conversations, setConversations] = useState<ConversationMeta[]>([]);
   // Paging state for that list (#95). `hasMore` starts true so the first "load
   // more" is allowed to try; it settles on the first short page.
@@ -269,22 +260,12 @@ export function ChatPanel({
   const [activity, setActivity] = useState<string | null>(null);
   const [liveCitations, setLiveCitations] = useState<ChatCitation[]>([]);
   const [error, setError] = useState<string | null>(null);
-  // Machine reason for the last error (issue #76) → drives role-aware BYOK copy
-  // in the live pane. null when cleared; the personal loop and unknown errors
-  // report an empty reason, which liveChatErrorCopy treats the same (falls back
-  // to the server message).
-  const [errorReason, setErrorReason] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
   // Scope chip breadth. Display state only — the backend conversation row is the
   // source of truth (issue #58); this mirrors it and is (re)initialised from it.
   const [scope, setScope] = useState<ChatScope>(() => targetDefaultScope(target));
-  // The conversation's pinned authorship filter (#103): a user id, or "" for off.
-  // Display state only, mirroring the backend row exactly as `scope` does. A user
-  // id and not a flag because a workspace's conversation list is shared — a
-  // boolean would mean different notes to each reader of the same thread.
-  const [ownerFilter, setOwnerFilter] = useState("");
   // A Client id and a speaker label, or "" for off. Display state mirroring the
-  // backend row, as the two above do. The speaker is a label, not an id: there is
+  // backend row, as `scope` does. The speaker is a label, not an id: there is
   // no person entity to key on (ADR-0002).
   const [clientFilter, setClientFilter] = useState("");
   const [speakerFilter, setSpeakerFilter] = useState("");
@@ -297,17 +278,6 @@ export function ChatPanel({
   // list replacement; normal sends (appended turns, streamed deltas) leave it
   // false so those stay announced (#64).
   const [bulkLoading, setBulkLoading] = useState(false);
-  // Workspace turn allowance for the composer meter (issue #69). null in personal
-  // context and on any unavailable/error/unmetered outcome → the display hides.
-  const [usage, setUsage] = useState<ChatUsage | null>(null);
-  // Workspace BYOK key metadata (issue #76). `undefined` = still checking (only
-  // in a managed workspace, to avoid flashing the composer before we know), then
-  // a `ChatKeyMeta` or `null`. Feeds the activation-pane decision.
-  const [keyMeta, setKeyMeta] = useState<ChatKeyMeta | null | undefined>(null);
-  // The server's view of the workspace retrieval index (#102). null = no
-  // information (Personal, an older server, or a failed lookup) → the empty-state
-  // copy falls back to the local sync proxy.
-  const [indexState, setIndexState] = useState<ChatIndexState | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   // The composer is auto-focused exactly once per mount, on the first transition
@@ -315,7 +285,7 @@ export function ChatPanel({
   // ready false→true and yanking focus out of the note body mid-typing (#64).
   const hasAutoFocusedRef = useRef(false);
   const sendingRef = useRef(false);
-  // Bumped on every context switch (note/workspace load, "+", history select).
+  // Bumped on every context switch (note load, "+", history select).
   // In-flight async work (a streaming send, a history fetch) captures the gen
   // at start and drops its writes if the gen moved — so a stale response can't
   // leak into the conversation the user switched to (#62).
@@ -421,7 +391,6 @@ export function ChatPanel({
     setActivity(null);
     setLiveCitations([]);
     setError(null);
-    setErrorReason(null);
     setTruncated(false);
   }, []);
 
@@ -460,7 +429,6 @@ export function ChatPanel({
       setConversationId(meta.id);
       setMessages([]);
       setScope(meta.breadth ?? targetDefaultScope(target));
-      setOwnerFilter(meta.ownerFilter ?? "");
       setClientFilter(meta.clientFilter ?? "");
       setSpeakerFilter(meta.speakerFilter ?? "");
       setConversations((prev) => [meta, ...prev.filter((c) => c.id !== meta.id)]);
@@ -540,10 +508,9 @@ export function ChatPanel({
       const gen = beginSwitch();
       setConversationId(id);
       try {
-        const [h, b, o, c, sp] = await Promise.all([
+        const [h, b, c, sp] = await Promise.all([
           ipc.chatHistory(target, id),
           ipc.chatGetBreadth(target, id),
-          ipc.chatGetOwnerFilter(target, id).catch(() => ""),
           ipc.chatGetPin(target, "client", id).catch(() => ""),
           ipc.chatGetPin(target, "speaker", id).catch(() => ""),
         ]);
@@ -551,7 +518,6 @@ export function ChatPanel({
         setMessages(h?.messages ?? []);
         if (h?.conversationId) setConversationId(h.conversationId);
         if (b) setScope(b);
-        setOwnerFilter(o ?? "");
         setClientFilter(c ?? "");
         setSpeakerFilter(sp ?? "");
       } catch {
@@ -565,37 +531,7 @@ export function ChatPanel({
     [target, beginSwitch],
   );
 
-  // Chat is pinned to the loaded context (issue #58). The chat follows the
-  // active workspace (Personal when none) — there's no tenant picker; the
-  // sidebar WorkspaceSwitcher is the only way to change where chat goes. We read
-  // the current workspace id to re-key the load effect (a switch reloads the
-  // other context's conversation) and the name for the context indicator.
-  const workspaceName = useCloudStore((s) =>
-    s.status.logged_in ? s.status.current_workspace?.name ?? null : null,
-  );
-  const workspaceId = useCloudStore((s) =>
-    s.status.logged_in ? s.status.current_workspace?.id ?? null : null,
-  );
-  // BYOK activation surface (issue #76). `billingEnabled` marks the managed
-  // (humla-cloud) server — the only place the activation pane applies; on self-
-  // host it never shows (chat_disabled keeps its existing behaviour). Role +
-  // members drive owner-vs-member copy; the add-on config drives the pitch.
-  const billingEnabled = useCloudStore((s) => s.status.billing_enabled);
-  const wsRole = useCloudStore((s) => s.status.current_workspace?.role ?? null);
-  const members = useCloudStore((s) => s.members);
-  const addon = useCloudStore((s) => s.status.chat_addon ?? null);
-  const inWorkspace = !!workspaceId;
-  // The signed-in user's own id — compared against the pin DIRECTLY rather than
-  // via `useOwnerName`, which returns null both for "that's you" and for "can't
-  // resolve them". The chip has to tell those two apart (#103).
-  const myUserId = useCloudStore((s) => s.status.user?.id ?? null);
-  const isOwner = wsRole === "owner";
-  const ownerMember = Object.values(members).find((m) => m.role === "owner");
-  const ownerName = ownerMember ? ownerMember.name || ownerMember.email : "the workspace owner";
-  // Personal chat gates on personal readiness (a configured provider/key);
-  // workspace chat does NOT — it runs on the workspace key, so a member without
-  // a personal key still reaches the pane (composer or activation state, #76).
-  const paneUsable = inWorkspace || ready;
+  const paneUsable = ready;
 
   // A library-wide pane with nothing to retrieve from would otherwise show the
   // standing invitation — inviting a question whose only honest answer is "I
@@ -605,84 +541,27 @@ export function ChatPanel({
   // A NOTE pane never reaches either: its anchor note IS grounding, so there is
   // always something to answer from.
   //
-  // Two things split them, and in a workspace the server's word wins (#102).
-  //
-  // `syncing` is the local proxy: a workspace pulls its notes down after a
-  // switch, so a mirror that looks empty mid-pull isn't evidence of an empty
-  // workspace. But it's only a proxy — the pull can be idle, with nothing left to
-  // pull, while the SERVER index is still backfilling. Workspace retrieval runs
-  // over that index, so `indexState` is the authoritative answer: "empty"
-  // (never indexed / backfilling) and "quarantined" (withheld in the indexer's
-  // deactivation grace window) both mean "not yet", where only "ready" makes an
-  // empty result a true statement about the library.
-  //
-  // null covers Personal (where the local store IS the retrieval corpus, so the
-  // local check is already authoritative), an older server without the route, and
-  // any failure — all of which fall back to the sync proxy rather than blocking.
-  const syncing = useCloudStore((s) => s.syncStatus) === "syncing";
-  const indexNotReady = indexState === "empty" || indexState === "quarantined";
   const globalPane = target.kind === "global";
-  const nothingToSearch = globalPane && libraryEmpty && !syncing && !indexNotReady;
-  const notesStillArriving = globalPane && libraryEmpty && (syncing || indexNotReady);
-  const composerHeld = nothingToSearch || notesStillArriving;
+  const nothingToSearch = globalPane && libraryEmpty;
+  const composerHeld = nothingToSearch;
   // Does the composer's control row have anything in it? The breadth picker needs
   // an anchor to offer a second option (#95), the model chip is panel-only and
   // Personal-only (#80), the truncation hint needs an anchor note, and the turn
   // meter needs a metered workspace (#69). On `/chat` in Personal that's nothing
   // at all — so don't render the row and leave a gap where content isn't.
-  // The authorship pin (#103), shown as a toggle in the same control row.
-  //
-  // HIDDEN IN PERSONAL — every note is the user's own there, so the control could
-  // only ever be the identity function — and HIDDEN UNDER `note` BREADTH, where
-  // it is either a no-op (your own note) or empties the pane's own anchor (a
-  // teammate's). That is the same reason the date window is dropped under `note`.
-  // Presence tracks the SCOPE, not the note: conditioning on who owns the anchor
-  // would only change the no-op case, while making the chip flicker between notes
-  // for a reason nothing on screen explains.
   const clients = useNotesStore((s) => s.clients);
   // Retrieval drops a Client pin under `note` breadth (Rust's
   // `client_pin_applies`), so it isn't offered there. The speaker pin stays live.
   const showClientPin = scope !== "note";
   const pinnedClientName = clients.find((c) => c.id === clientFilter)?.name ?? null;
-  const showAuthorPin = inWorkspace && scope !== "note";
-  // Editable iff the filter is off, or pinned to you. Anna's way out of a thread
-  // pinned to Michael is her own thread — the alternative is her quietly rewriting
-  // what his scrollback means. (The backend does NOT enforce this, matching
-  // `chat_set_breadth`; making this the one chat setting with a server-side
-  // authorization rule wasn't worth it.)
-  const authorPinIsMine = ownerFilter !== "" && ownerFilter === myUserId;
-  const authorPinEditable = ownerFilter === "" ? myUserId !== null : authorPinIsMine;
-  // The pinned person's display name — for the chip's label and for the model's
-  // disclosure line. Null when unresolvable (a removed member, or a roster that
-  // hasn't loaded); the pin still filters, it just loses its wording.
-  const pinnedAuthorName = useMemberName(ownerFilter || null);
   // One token per ACTIVE pin, nothing when none are.
   const pinTokens: {
     key: string;
     label: string;
     title: string;
     icon: React.ReactNode;
-    /** Absent when this reader may not lift the pin (someone else's authorship
-     *  pin): the token still shows, because it binds every answer in the thread. */
-    clear?: () => void;
+    clear: () => void;
   }[] = [
-    ...(showAuthorPin && ownerFilter !== ""
-      ? [
-          {
-            key: "author",
-            label: authorPinIsMine
-              ? "Created by me"
-              : pinnedAuthorName
-                ? `Created by ${pinnedAuthorName}`
-                : "Created by someone else",
-            title: authorPinEditable
-              ? "Only notes you recorded are searched. Meetings someone else recorded are excluded, even ones you attended."
-              : `Pinned to notes recorded by ${pinnedAuthorName ?? "another member"}. Start your own conversation to search differently.`,
-            icon: <UserRound size={12} strokeWidth={1.7} aria-hidden="true" />,
-            ...(authorPinEditable ? { clear: () => toggleOwnerFilter() } : {}),
-          },
-        ]
-      : []),
     // Gated on the breadth, not just on the value: retrieval drops a Client pin
     // under `note`, so a token there would read as pinned while the search ran
     // past it — the invisible widening this whole control exists to prevent. The
@@ -717,55 +596,8 @@ export function ChatPanel({
       : []),
   ];
 
-  // Activation gating (#76). Only on the managed server + a workspace. While the
-  // key metadata is still loading (undefined) show neither composer nor pane, so
-  // the composer doesn't flash before we know. `notActivated` = no key + no
-  // add-on (usage null). Self-host / personal never reach here. Computed here
-  // (above the effects) so the auto-focus effect can depend on it.
-  const billingWorkspace = inWorkspace && billingEnabled;
-  const activationLoading = billingWorkspace && keyMeta === undefined;
-  const notActivated = billingWorkspace && keyMeta != null && !keyMeta.configured && !usage;
-
-  // Fetch, gen-guarded, the workspace turn allowance for the composer meter
-  // (#69) and — on the managed server — the BYOK key metadata for the activation
-  // decision (#76). Personal → clear both, no round-trip. The backend collapses
-  // every unavailable/error/unmetered usage case to null (the meter hides).
-  const refreshActivation = useCallback(
-    async (gen: number) => {
-      if (!workspaceId) {
-        setUsage(null);
-        setKeyMeta(null);
-        setIndexState(null);
-        return;
-      }
-      try {
-        const [u, m, ix] = await Promise.all([
-          ipc.chatUsage(),
-          billingEnabled ? cloudApi.chatKeyMeta(workspaceId) : Promise.resolve(null),
-          // Settled separately: this one is a HINT. A rejection here must not
-          // take the usage meter and activation decision down with it.
-          ipc.chatIndexState().catch(() => null),
-        ]);
-        if (gen === switchGenRef.current) {
-          setUsage(u);
-          setKeyMeta(m);
-          setIndexState(ix);
-        }
-      } catch {
-        if (gen === switchGenRef.current) {
-          setUsage(null);
-          setKeyMeta(null);
-          setIndexState(null);
-        }
-      }
-    },
-    [workspaceId, billingEnabled],
-  );
-
-  // Load persisted history + breadth on mount, note change, and workspace
-  // switch, clearing transient state. Keying on the workspace id makes a context
-  // switch reload the right conversation — this replaces the old per-tenant
-  // reset that lived in `changeTenant`. On unmount / change, rebuild the note's
+  // Load persisted history + breadth on mount and note change, clearing
+  // transient state. On unmount / change, rebuild the note's
   // retrieval index so edits made this session are searchable next time.
   useEffect(() => {
     const gen = ++switchGenRef.current;
@@ -776,13 +608,6 @@ export function ChatPanel({
     // Hide the history affordance until the fresh list is known (no flicker of
     // the previous note's conversations on switch, #62).
     setConversations([]);
-    // Clear the turn meter until the new context's fetch resolves (#69). Scoped
-    // to this effect, not resetTransient: usage is per-WORKSPACE, so clearing on
-    // every per-conversation "+"/history switch would flicker it needlessly.
-    setUsage(null);
-    // Mark activation "checking" on a managed workspace so the footer shows
-    // neither composer nor pane until we know (#76); clear it otherwise.
-    setKeyMeta(billingEnabled && !!workspaceId ? undefined : null);
     // Defer SR announcements until the initial message list has loaded (#64).
     setBulkLoading(true);
     // Both async loads gate on the gen as well as `cancelled`: an in-flight
@@ -815,17 +640,6 @@ export function ChatPanel({
       .catch(() => {
         if (!cancelled && gen === switchGenRef.current) setScope(targetDefaultScope(target));
       });
-    // Same for the authorship pin (#103). Off is the safe fallback: a chip that
-    // wrongly reads "off" under-promises, where one that wrongly reads "on" would
-    // claim a narrowing the turn isn't doing.
-    ipc
-      .chatGetOwnerFilter(target)
-      .then((o) => {
-        if (!cancelled && gen === switchGenRef.current) setOwnerFilter(o ?? "");
-      })
-      .catch(() => {
-        if (!cancelled && gen === switchGenRef.current) setOwnerFilter("");
-      });
     // Off is the safe fallback: a token wrongly reading "on" would claim a
     // narrowing the turn isn't doing.
     for (const [kind, set] of [
@@ -842,7 +656,6 @@ export function ChatPanel({
         });
     }
     void reloadConversationList(gen);
-    void refreshActivation(gen);
     return () => {
       cancelled = true;
       // Keep the anchor searchable on the way out. A note-less pane (library-wide
@@ -850,7 +663,7 @@ export function ChatPanel({
       // checkpoints anyway.
       if (noteId !== null) void ipc.chatReindexNote(noteId).catch(() => {});
     };
-  }, [target, workspaceId, billingEnabled, reloadConversationList, refreshActivation, resetTransient]);
+  }, [target, reloadConversationList, resetTransient]);
 
   // Persist a breadth change to the conversation (issue #58): update the chip
   // optimistically, then write it through so the next turn reads the new value.
@@ -870,38 +683,12 @@ export function ChatPanel({
     void ipc.chatSetBreadth(target, conversationId, next).catch((e) => setError(String(e)));
   }
 
-  // Pin the conversation to the caller's own notes, or clear the pin (#103).
-  // Optimistic like the breadth write, and only ever offers MY id — the chip is
-  // inert when someone else's pin is in force (see `authorPinEditable`).
-  function toggleOwnerFilter() {
-    const next = ownerFilter === "" ? (myUserId ?? "") : "";
-    if (next === "" && ownerFilter === "") return;
-    setOwnerFilter(next);
-    // Same as breadth: nothing to write to on a draft, and the pin especially must
-    // not be stored somewhere the chip can't see (#120/#103). A Note still writes
-    // through and lazily creates, as it did before.
-    if (!conversationId && !targetResumesOnOpen(target)) return;
-    void ipc
-      .chatSetOwnerFilter(target, conversationId, next === "" ? null : next)
-      .catch((e) => setError(String(e)));
-  }
-
   // Optimistic and draft-aware like the breadth write above: a drafting pane has
   // no row to write to, so `send` carries the value in instead.
   function setPin(kind: ChatPinKind, next: string | null) {
     (kind === "client" ? setClientFilter : setSpeakerFilter)(next ?? "");
     if (!conversationId && !targetResumesOnOpen(target)) return;
     void ipc.chatSetPin(target, conversationId, kind, next).catch((e) => setError(String(e)));
-  }
-
-  // Owner activated chat from the pane (#76): the entry reports fresh metadata →
-  // flip to the composer WITHOUT a reload (BYOK is unmetered). Clear any prior
-  // activation error so the live pane starts clean.
-  function handleActivated(m: ChatKeyMeta) {
-    setKeyMeta(m);
-    setUsage(null);
-    setError(null);
-    setErrorReason(null);
   }
 
   // Stream subscription. Bound once; cancelled-flag + claim keeps it StrictMode-
@@ -933,7 +720,6 @@ export function ChatPanel({
     onChatError((e) => {
       if (sendingRef.current) {
         setError(e.message);
-        setErrorReason(e.reason ?? null);
       }
     }).then(claim);
     return () => {
@@ -953,13 +739,12 @@ export function ChatPanel({
   // steal focus from the note body while the user is typing there.
   useEffect(() => {
     // Only "consume" the one-per-mount focus once the composer actually mounted
-    // (inputRef present) — otherwise the activation pane / loading state would
-    // eat it and the composer would never get focused when it appears (#76).
+    // (inputRef present).
     if (!hasAutoFocusedRef.current && inputRef.current) {
       hasAutoFocusedRef.current = true;
       inputRef.current.focus();
     }
-  }, [paneUsable, notActivated, activationLoading]);
+  }, [paneUsable]);
 
   // Grow the composer with the text. `rows={1}` sets the floor and `max-h-40` the
   // ceiling, but nothing in between: without this a wrapped question scrolls
@@ -984,8 +769,6 @@ export function ChatPanel({
   // render nothing. Actions are stable, so this fires only on real data changes.
   useEffect(() => {
     if (!onControls) return;
-    // Publish whenever the chat UI is usable — including an unactivated workspace,
-    // so history (popover) stays reachable during the cutover (#76).
     if (!paneUsable) {
       onControls(null);
       return;
@@ -1010,7 +793,7 @@ export function ChatPanel({
       deleteConversation,
       renameConversation,
       loadMore: loadMoreConversations,
-      status: inWorkspace || !model ? null : { provider, model },
+      status: !model ? null : { provider, model },
     });
   }, [
     onControls,
@@ -1026,16 +809,12 @@ export function ChatPanel({
     deleteConversation,
     renameConversation,
     loadMoreConversations,
-    inWorkspace,
     provider,
     model,
   ]);
 
   async function send() {
     const text = input.trim();
-    // Mirror the render gate, NOT personal readiness (#76): a workspace send runs
-    // on the workspace key, so it must not require a personal provider key — an
-    // owner who typed the key or any member can send in an activated workspace.
     if (!text || sending || !paneUsable) return;
     setInput("");
     setError(null);
@@ -1059,9 +838,6 @@ export function ChatPanel({
     try {
       // Send to the resolved session (null lazily creates the note's first one),
       // capturing the id the backend landed on so the reload targets it (#61).
-      // The pinned author's NAME rides the turn for the prompt's disclosure line
-      // only — the id lives on the conversation row and is what filters, so an
-      // unresolvable name costs wording and nothing else (#103).
       // A drafting pane has persisted nothing, so its chips are the only record of
       // the breadth and pin the user chose — they ride along and are applied to the
       // row this turn creates (#120). With a conversation already open they're
@@ -1070,12 +846,10 @@ export function ChatPanel({
       const result = await ipc.chatSend(target,
         conversationId,
         text,
-        pinnedAuthorName,
         conversationId
           ? null
           : {
               breadth: scope,
-              ownerFilter: ownerFilter || null,
               clientFilter: clientFilter || null,
               speakerFilter: speakerFilter || null,
             },
@@ -1089,16 +863,9 @@ export function ChatPanel({
       // A first turn creates the conversation and bumps message counts — refresh
       // the list so the history popover + its visibility rule stay current (#62).
       void reloadConversationList(gen);
-      // A completed turn consumes allowance — refresh the meter (#69).
-      void refreshActivation(gen);
     } catch (e) {
       if (gen !== switchGenRef.current) return;
       setError((prev) => prev ?? String(e));
-      // Authoritative activation fallback (#76): a send can fail with
-      // chat_not_activated if the proactive check was stale — re-detect so the
-      // pane flips in. (byok_* failures leave the key configured, so this stays
-      // on the live pane and the error copy shows instead.)
-      void refreshActivation(gen);
       try {
         // A first turn sent from a draft may have CREATED the conversation before
         // failing: the backend persists the user message, then drops only the
@@ -1168,9 +935,7 @@ export function ChatPanel({
     inputRef.current?.focus();
   }
 
-  // Personal chat gates on personal readiness; workspace chat never shows this
-  // setup prompt (it runs on the workspace key, activated via the pane below).
-  if (!inWorkspace && !readinessLoading && !ready) {
+  if (!readinessLoading && !ready) {
     // Ollama's own installer and pull command, only for a server that is
     // Ollama — off its port the runtime is LM Studio, llama-server, vLLM or
     // mlx, and `ollama pull` is not a command that user has (#179).
@@ -1206,24 +971,10 @@ export function ChatPanel({
 
   const showTyping = sending && streaming.length === 0 && !activity;
 
-  // Role-aware BYOK error copy when we have the reason; else the server message.
-  const errorView = liveChatErrorCopy(errorReason, { isOwner, ownerName }) ?? error;
+  const errorView = error;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      {/* Workspace context signal (#63): nothing in Personal; one muted line in
-          a workspace. It sits OUTSIDE the scroll container as a fixed flex item,
-          so it stays visible as a privacy signal while messages scroll beneath
-          it. It must own its vertical space with a bottom hairline, or scrolled
-          bubbles butt straight up against the text with no separation. No
-          breadth/tenant chrome here — breadth moved to the composer, and the
-          tenant is pinned to the loaded workspace (#58). */}
-      {workspaceName && !onPage && (
-        <div className="shrink-0 px-4 py-2 border-b border-[var(--color-line)] text-xs text-[var(--color-text-muted)]">
-          Chatting in {workspaceName} · visible to members
-        </div>
-      )}
-
       {/* Message area as an aria-live log (#64): streamed deltas, "Thinking…"
           and tool-activity lines are announced politely to screen readers. */}
       <div
@@ -1243,11 +994,9 @@ export function ChatPanel({
           >
             <MessageCircle size={22} strokeWidth={1.5} className="text-[var(--color-text-disabled)]" />
             <p className="text-sm text-[var(--color-text-muted)]">
-              {notesStillArriving
-                ? "Still syncing your notes — this will be ready in a moment."
-                : nothingToSearch
-                  ? "No notes yet. Record or import a meeting, then ask about it here."
-                  : "Ask anything about your notes — it searches, reads, and cites them to answer."}
+              {nothingToSearch
+                ? "No notes yet. Record or import a meeting, then ask about it here."
+                : "Ask anything about your notes — it searches, reads, and cites them to answer."}
             </p>
             {/* The same prompts the "/" menu offers (#80), shown up front on a new
                 chat — a blank page tells a first-time user nothing about what this
@@ -1308,7 +1057,7 @@ export function ChatPanel({
         )}
       </div>
 
-      {!notActivated && errorView && (
+      {errorView && (
         <div
           className={cn(
             "mb-2 flex items-start gap-2 rounded-[var(--radius)] bg-[var(--color-accent-soft)] px-3 py-2 text-xs text-[var(--color-accent-text)]",
@@ -1330,27 +1079,6 @@ export function ChatPanel({
         </div>
       )}
 
-      {activationLoading ? (
-        <div
-          className={cn(
-            "shrink-0 p-4 text-sm text-[var(--color-text-muted)]",
-            onPage ? "" : "border-t border-[var(--color-line)]",
-          )}
-        >
-          Checking chat activation…
-        </div>
-      ) : notActivated ? (
-        <ActivationPane
-          // Remount on workspace switch so the entry draft is destroyed
-          // synchronously — belt-and-suspenders draft isolation (#76).
-          key={workspaceId as string}
-          workspaceId={workspaceId as string}
-          isOwner={isOwner}
-          ownerName={ownerName}
-          addon={addon}
-          onActivated={handleActivated}
-        />
-      ) : (
       <div
         className={cn(
           "relative shrink-0 p-2.5 flex flex-col gap-1.5",
@@ -1415,13 +1143,11 @@ export function ChatPanel({
             readOnly={composerHeld}
             aria-disabled={composerHeld || undefined}
             placeholder={
-              notesStillArriving
-                ? "Syncing your notes…"
-                : nothingToSearch
-                  ? "Nothing to search yet"
-                  : sending
-                    ? "Streaming — press Enter to stop"
-                    : "Ask about your notes…"
+              nothingToSearch
+                ? "Nothing to search yet"
+                : sending
+                  ? "Streaming — press Enter to stop"
+                  : "Ask about your notes…"
             }
             aria-label="Ask about your notes"
             // The global `select, textarea` rule in globals.css is UNLAYERED, so it
@@ -1464,10 +1190,6 @@ export function ChatPanel({
             </button>
           )}
         </div>
-        {/* Composer control row: breadth picker bottom-left, workspace turn
-            allowance bottom-right (#69). The meter shows only in a metered
-            workspace — `usage` is null in personal context and on any
-            unavailable/error/unmetered outcome, so nothing renders then. */}
         {/* Active pins sit above the control row, not in it: three filled chips
             inline overflow the 320px panel floor, and a row that is mostly
             accent-soft stops reading as "something is narrowing every answer". */}
@@ -1508,9 +1230,6 @@ export function ChatPanel({
               fallbackScope={targetDefaultScope(target)}
             />
             <PinPicker
-              showAuthor={showAuthorPin && authorPinEditable}
-              authorPinned={ownerFilter !== ""}
-              onAuthor={toggleOwnerFilter}
               showClient={showClientPin}
               clients={clients}
               clientFilter={clientFilter}
@@ -1521,13 +1240,10 @@ export function ChatPanel({
             {/* Which model is about to answer (#80) — previously invisible
                 without opening Settings. Muted, not disabled: --color-text-
                 disabled fails contrast on interactive text (see #65).
-                Personal only: a workspace turn runs on the server's model, and
-                `model` here is the LOCAL chat_model setting, so showing it in a
-                workspace would name a model that isn't answering.
                 Not on the page, where it's published upward and shown in the
                 header's pill row — the same fact twice on one screen is clutter,
                 and the header is where that surface keeps its identity info. */}
-            {!onPage && !inWorkspace && model && (
+            {!onPage && model && (
               <span
                 data-testid="chat-model-indicator"
                 title={`Answering with ${model} (${provider}) — change it in Settings → Chat`}
@@ -1548,71 +1264,8 @@ export function ChatPanel({
               </span>
             )}
           </div>
-          {usage && (
-            <span
-              className={cn(
-                "text-xs tabular-nums",
-                // Colour-only status by fraction consumed (#69) — AAA on the
-                // panel surface in both themes. Size/weight unchanged.
-                {
-                  default: "text-[var(--color-text-muted)]",
-                  warning: "text-[var(--color-status-warning)]",
-                  danger: "text-[var(--color-status-danger)]",
-                }[usageTone(usage.used, usage.cap)],
-              )}
-            >
-              {usage.used}/{usage.cap} turns
-            </span>
-          )}
         </div>
       </div>
-      )}
-    </div>
-  );
-}
-
-// Role-aware activation pane for an unactivated workspace (#76). Replaces the
-// composer while history stays readable above. Owner: a values-first line + the
-// shared key entry (+ the managed add-on as the alternative when the server
-// offers it). Member: nothing actionable, just who to ask. The privacy line
-// respects the PRD claim boundary — "your OpenAI relationship", not "we can't
-// see your data".
-function ActivationPane({
-  workspaceId,
-  isOwner,
-  ownerName,
-  addon,
-  onActivated,
-}: {
-  workspaceId: string;
-  isOwner: boolean;
-  ownerName: string;
-  addon: ChatAddon | null;
-  onActivated: (meta: ChatKeyMeta) => void;
-}) {
-  return (
-    <div className="shrink-0 border-t border-[var(--color-line)] p-4 flex flex-col gap-3">
-      {isOwner ? (
-        <>
-          <p className="text-sm leading-relaxed">
-            Turn on chat for this workspace with your own OpenAI key — your team's chat runs on your
-            OpenAI relationship, free and unmetered.
-          </p>
-          <ChatKeyEntry workspaceId={workspaceId} onActivated={onActivated} />
-          {addon?.available && (
-            <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
-              Prefer not to manage a key? The managed add-on
-              {addon.price_cents != null &&
-                ` (${formatSeatPrice(addon.price_cents, addon.currency)}/mo)`}{" "}
-              runs chat on Humla's key — set it up in Organization → Workspace chat.
-            </p>
-          )}
-        </>
-      ) : (
-        <p className="text-sm text-[var(--color-text-muted)]">
-          Chat isn't activated for this workspace yet — ask {ownerName}.
-        </p>
-      )}
     </div>
   );
 }
@@ -1835,13 +1488,10 @@ function BreadthPicker({
   );
 }
 
-// One `+ Filter` trigger for all three pins. Active ones are not shown here —
+// One `+ Filter` trigger for both pins. Active ones are not shown here —
 // they render as tokens above the composer — so the trigger's word never changes
 // with state: it is an action, not a status.
 function PinPicker({
-  showAuthor,
-  authorPinned,
-  onAuthor,
   showClient,
   clients,
   clientFilter,
@@ -1849,11 +1499,6 @@ function PinPicker({
   onClient,
   onSpeaker,
 }: {
-  /** False in Personal, where every note is the caller's own, and when someone
-   *  else's pin is in force — that reader may see it but not lift it. */
-  showAuthor: boolean;
-  authorPinned: boolean;
-  onAuthor: () => void;
   /** False under `note` breadth, where retrieval drops a Client pin. */
   showClient: boolean;
   clients: { id: string; name: string }[];
@@ -1883,22 +1528,6 @@ function PinPicker({
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
         <div className="flex flex-col gap-3">
-          {showAuthor && (
-            <PinField label="Author">
-              <button
-                type="button"
-                aria-pressed={authorPinned}
-                onClick={() => {
-                  onAuthor();
-                  setOpen(false);
-                }}
-                className={cn(QUIET_CONTROL, "cursor-pointer hover:text-[var(--color-text)]")}
-              >
-                <UserRound size={13} strokeWidth={1.7} aria-hidden="true" />
-                {authorPinned ? "Anyone" : "Only me"}
-              </button>
-            </PinField>
-          )}
           {showClient && (
           <PinField label="Client">
             {clients.length === 0 ? (
@@ -1967,17 +1596,13 @@ function SpeakerPinInput({
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([
-      ipc.speakerLabelStats().catch(() => []),
-      ipc.speakerRoster().catch(() => [] as string[]),
-    ]).then(([stats, roster]) => {
+    void ipc.speakerLabelStats().catch(() => []).then((stats) => {
       // A backend that doesn't know the command resolves with null rather than
       // rejecting, which `.catch` would miss. Suggestions are an enhancement, so
       // a bad shape must not take the composer down with it.
       if (!cancelled) {
         setSuggestions({
           stats: Array.isArray(stats) ? stats : [],
-          roster: Array.isArray(roster) ? roster : [],
         });
       }
     });
@@ -1994,7 +1619,6 @@ function SpeakerPinInput({
         ? suggestSpeakerLabels({
             query: draft,
             stats: suggestions.stats,
-            roster: suggestions.roster,
             inNoteLabels: [],
           }).map((s) => ({ value: s.label, label: s.label, content: <span>@{s.label}</span> }))
         : [],

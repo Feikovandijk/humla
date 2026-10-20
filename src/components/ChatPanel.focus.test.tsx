@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { mockTauri } from "../test/tauri";
-import { useCloudStore, DISCONNECTED } from "../lib/cloud";
 import { useNotesStore } from "../lib/store";
 
 // Readiness is mocked here so the test can flip `ready` at will — the Ollama
@@ -32,7 +31,6 @@ function panel() {
 
 beforeEach(() => {
   mockTauri({ chat_history: () => ({ conversationId: null, messages: [] }) });
-  useCloudStore.setState({ status: DISCONNECTED });
   useNotesStore.setState({ notes: [], folders: [] });
   readyState.value = true;
 });
