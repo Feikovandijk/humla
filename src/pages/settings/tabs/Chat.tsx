@@ -275,9 +275,8 @@ function RebuildIndexRow() {
             {running ? "Rebuilding…" : "Rebuild now"}
           </button>
           <p className="text-xs text-[var(--color-text-muted)] mt-1">
-            Re-reads your whole library and re-embeds anything that changed, which uses your
-            configured key — a few cents at most. Only affects what chat can find; your notes
-            aren't changed.
+            Re-reads your whole library and re-embeds anything that changed. Only affects what
+            chat can find; your notes aren't changed.
           </p>
         </>
       )}

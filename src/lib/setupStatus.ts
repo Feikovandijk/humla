@@ -113,16 +113,15 @@ export async function computeSetupStatus(): Promise<SetupStatus> {
   }
 
   // ---- Summary configured? (informational) --------------------------------
-  // openai → a key exists; local → a model name is set. Never gates.
+  // local (the default) → a model name is set; cloud → its key exists. Never gates.
+  const effectiveSummaryProvider = summaryProvider?.trim() || "local";
   let summaryConfigured = false;
-  if (summaryProvider === "local") {
+  if (effectiveSummaryProvider === "local") {
     const model = await ipc.getSetting("local_llm_model").catch(() => null);
     summaryConfigured = !!model && model.trim().length > 0;
   } else {
-    // Default provider is openai — configured iff its key is present. (This
-    // read may duplicate the STT one above; it's cheap and keeps the branches
-    // independent.)
-    const key = await ipc.getProviderKey("openai").catch(() => null);
+    const keyProvider = effectiveSummaryProvider === "anthropic" ? "anthropic" : "openai";
+    const key = await ipc.getProviderKey(keyProvider).catch(() => null);
     summaryConfigured = !!key;
   }
 
@@ -142,7 +141,7 @@ export async function computeSetupStatus(): Promise<SetupStatus> {
     screenGranted,
     stt,
     summaryConfigured,
-    summaryProvider: summaryProvider ?? "openai",
+    summaryProvider: effectiveSummaryProvider,
     cloudWorkspace,
     language: language ?? "auto",
     pipelineReady: micGranted && stt.working,

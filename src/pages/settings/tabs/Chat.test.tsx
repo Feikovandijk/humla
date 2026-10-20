@@ -253,9 +253,8 @@ describe("ChatTab rebuild-index row", () => {
     // key-spending action is worth taking.
     expect(await screen.findByText(/7 recordings were indexed before the latest improvements/)).toBeTruthy();
     expect(screen.getByRole("button", { name: /Rebuild now/i })).toBeTruthy();
-    // The cost is disclosed rather than buried.
-    expect(screen.getByText(/uses your configured key/)).toBeTruthy();
-    // And it says what it does NOT touch, since "rebuild" sounds destructive.
+    // It states what it does and what it does NOT touch, since "rebuild" sounds destructive.
+    expect(screen.getByText(/re-embeds anything that changed/i)).toBeTruthy();
     expect(screen.getByText(/your notes aren't changed/)).toBeTruthy();
   });
 
