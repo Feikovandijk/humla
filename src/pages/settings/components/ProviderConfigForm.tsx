@@ -3,6 +3,7 @@ import {
   DEEPGRAM_MODELS,
   GROQ_MODELS,
   LOCAL_PROVIDER,
+  PARAKEET_PROVIDER,
   PROVIDERS_BASE,
   TRANSCRIBE_MODELS,
   WHISPER_PRESETS,
@@ -31,6 +32,8 @@ const MODEL_DESCRIPTIONS: Record<TranscribeProvider, string> = {
   groq: "Whisper Large v3 Turbo at OpenAI-compatible endpoints — same Whisper quality, ~10× cheaper and faster than OpenAI's hosted version.",
   local:
     "Only downloaded models are offered — manage them under Local models below.",
+  parakeet:
+    "Parakeet Ultra through FluidAudio/CoreML. 25 European languages, English-first — no Norwegian, no custom vocabulary or prior-context biasing.",
 };
 
 // Reusable provider+model picker rendered as self-describing rows. Used by
@@ -50,9 +53,9 @@ const MODEL_DESCRIPTIONS: Record<TranscribeProvider, string> = {
 //   3. Filter the model_id picker to actually-downloaded files.
 //
 // `filterLocalToLanguage` (when set) restricts the local model picker to
-// `LanguageSpecific` models matching the language PLUS multilingual
-// fallbacks. Used by the per-language override form so "Norwegian → Local
-// → ?" only offers NB Whisper or multilingual options.
+// language-specific models matching the language PLUS multilingual fallbacks.
+// Used by the per-language override form so a language with a specialist model
+// only offers that model or a multilingual option.
 export function ProviderConfigForm({
   value,
   onChange,
@@ -98,6 +101,12 @@ export function ProviderConfigForm({
         value={value.model}
         onChange={(v) => onChange({ provider: "groq", model: v })}
         options={GROQ_MODELS.map((m) => ({ value: m, label: m }))}
+      />
+    ) : value.provider === "parakeet" ? (
+      <Select
+        value={value.model}
+        onChange={(v) => onChange({ provider: "parakeet", model: v })}
+        options={[{ value: "ultra", label: "Parakeet Ultra" }]}
       />
     ) : (
       <Select
@@ -147,10 +156,14 @@ export function ProviderConfigForm({
                 onChange({ provider: "deepgram", model: "nova-3" });
               } else if (p === "groq") {
                 onChange({ provider: "groq", model: "whisper-large-v3-turbo" });
+              } else if (p === "parakeet") {
+                onChange({ provider: "parakeet", model: "ultra" });
               }
             }}
             options={
-              localAvailable ? [...PROVIDERS_BASE, LOCAL_PROVIDER] : PROVIDERS_BASE
+              localAvailable
+                ? [...PROVIDERS_BASE, LOCAL_PROVIDER, PARAKEET_PROVIDER]
+                : [...PROVIDERS_BASE, PARAKEET_PROVIDER]
             }
           />
         }

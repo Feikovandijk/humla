@@ -6,6 +6,7 @@ mod openai;
 mod anthropic;
 mod local_whisper;
 mod diarize;
+mod parakeet;
 mod echo;
 mod languages;
 mod presets;
@@ -80,6 +81,11 @@ pub struct AppState {
     /// on this note or another. Its only job is to keep a second Transcribe
     /// press on the *same* note from replaying the same take twice.
     pub transcribing: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Long-lived Parakeet Ultra `asr-serve` child. Lazy: it loads the CoreML
+    /// model on the first Parakeet chunk (or at `recording_start` prewarm) and
+    /// keeps it for the app session. The sidecar exits on stdin EOF, which is
+    /// also how the app's `_exit(0)` reaps it.
+    pub parakeet: Arc<parakeet::ParakeetManager>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -210,6 +216,9 @@ where
                 unify_locks: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 chat_cancels: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 transcribing: Arc::new(Mutex::new(std::collections::HashSet::new())),
+                parakeet: Arc::new(parakeet::ParakeetManager::new(
+                    diarize::sidecar_path(app.handle()).ok(),
+                )),
             });
             let menu = build_menu(app.handle())?;
             app.set_menu(menu)?;
@@ -268,6 +277,18 @@ where
                 let conn = state.db.lock();
                 if let Err(e) = db::migrate_per_language_v4(&conn) {
                     eprintln!("migrate_per_language_v4: {e}");
+                }
+            }
+            // NB Whisper retired. Rewrite any stored default or
+            // per-language override that still names it, and remove the
+            // orphaned model file once.
+            {
+                let state: tauri::State<AppState> = app.state();
+                let conn = state.db.lock();
+                if let Err(e) =
+                    db::migrate_retired_whisper_models(&conn, &app_dir.join("models"))
+                {
+                    eprintln!("migrate_retired_whisper_models: {e}");
                 }
             }
             // v0.31 — grandfather existing installs past the new first-run
@@ -432,6 +453,9 @@ where
             commands::diarize_status,
             commands::diarize_download,
             commands::diarize_delete,
+            commands::parakeet_status,
+            commands::parakeet_download,
+            commands::parakeet_delete,
             commands::recording_start,
             commands::recording_stop,
             commands::import_audio,

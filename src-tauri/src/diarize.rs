@@ -441,7 +441,7 @@ pub async fn diarize_file(
 /// The sidecar's own error line out of its stderr, which FluidAudio fills with
 /// logging, so the sidecar tags that line `humla-error:`. An untagged failure
 /// (a crash) gives its last line and how the process exited.
-fn sidecar_error(stderr: &str, exit: impl std::fmt::Display) -> String {
+pub(crate) fn sidecar_error(stderr: &str, exit: impl std::fmt::Display) -> String {
     const TAG: &str = "humla-error:";
     let tagged = stderr
         .lines()
@@ -496,7 +496,7 @@ fn parse_segment_payload(stdout: &str) -> serde_json::Result<Vec<Segment>> {
 
 /// Mirror of audio-capture sidecar resolution: bundle path in production,
 /// `src-tauri/binaries/` in dev.
-fn sidecar_path(app: &AppHandle) -> Result<PathBuf> {
+pub(crate) fn sidecar_path(app: &AppHandle) -> Result<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             for name in [

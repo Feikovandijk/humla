@@ -19,6 +19,8 @@ pub enum ProviderConfig {
     Deepgram(DeepgramConfig),
     #[serde(rename = "groq")]
     Groq(GroqConfig),
+    #[serde(rename = "parakeet")]
+    Parakeet(ParakeetConfig),
 }
 
 impl ProviderConfig {
@@ -28,6 +30,7 @@ impl ProviderConfig {
             ProviderConfig::Local(_) => ProviderId::Local,
             ProviderConfig::Deepgram(_) => ProviderId::Deepgram,
             ProviderConfig::Groq(_) => ProviderId::Groq,
+            ProviderConfig::Parakeet(_) => ProviderId::Parakeet,
         }
     }
 
@@ -41,6 +44,7 @@ impl ProviderConfig {
             ProviderConfig::Local(c) => &c.model_id,
             ProviderConfig::Deepgram(c) => &c.model,
             ProviderConfig::Groq(c) => &c.model,
+            ProviderConfig::Parakeet(c) => &c.model,
         }
     }
 
@@ -53,6 +57,7 @@ impl ProviderConfig {
             // hosted Groq-compat server they'd switch to the OpenAI
             // provider with a custom base_url.
             ProviderConfig::Groq(_) => None,
+            ProviderConfig::Parakeet(_) => None,
         }
     }
 }
@@ -80,6 +85,14 @@ pub struct DeepgramConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GroqConfig {
+    pub model: String,
+}
+
+/// Parakeet Ultra through FluidAudio/CoreML. The model id is stored so a
+/// future FluidAudio version can add another Parakeet variant without a
+/// config migration; today only `"ultra"` is accepted by the sidecar.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParakeetConfig {
     pub model: String,
 }
 
@@ -239,6 +252,20 @@ mod tests {
         let back: ProviderConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(cfg, back);
         assert!(json.contains(r#""provider":"groq""#));
+    }
+
+    #[test]
+    fn parakeet_round_trips_through_json() {
+        let cfg = ProviderConfig::Parakeet(ParakeetConfig {
+            model: "ultra".to_string(),
+        });
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: ProviderConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(cfg, back);
+        assert!(json.contains(r#""provider":"parakeet""#));
+        assert_eq!(cfg.model(), "ultra");
+        assert_eq!(cfg.provider_id(), "parakeet");
+        assert_eq!(cfg.base_url(), None);
     }
 
     #[test]

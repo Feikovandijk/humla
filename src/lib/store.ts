@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { ipc, onRecordingDiagnostic, onRecordingError, onRecordingStatus, onSummary, onSummaryStatus, onTitleStatus, onTranscribeStatus, onDiarizeStatus, onTranscript, onTranscriptReplaced, onNotesChanged, onSyncStatus, onSyncConflict, onLocalWhisperProgress, onLocalWhisperDownloadError, type Client, type Folder, type Note, type RecordingDiagnostic, type RecordingStatus, type Step } from "./ipc";
+import { ipc, onRecordingDiagnostic, onRecordingError, onRecordingStatus, onSummary, onSummaryStatus, onTitleStatus, onTranscribeStatus, onDiarizeStatus, onTranscript, onTranscriptReplaced, onNotesChanged, onSyncStatus, onSyncConflict, onLocalWhisperProgress, onLocalWhisperDownloadError, onParakeetProgress, onParakeetDownloadError, type Client, type Folder, type Note, type RecordingDiagnostic, type RecordingStatus, type Step } from "./ipc";
 import { useCloudStore } from "./cloud";
 
 type NotesState = {
@@ -489,6 +489,27 @@ export function bindBackendListeners() {
     useRecordingStore.getState().pushError({
       noteId: null,
       message: `Transcription model download failed: ${message}`,
+    });
+  });
+  // Parakeet has a fractional progress stream rather than byte counts. Map it
+  // onto the same slice so the nag chip can show a live bar; the settings hook
+  // clears the slice when the download promise settles.
+  onParakeetProgress(({ modelId, fraction, phase }) => {
+    if (phase === "done") {
+      useDownloadStore.getState().clear();
+      return;
+    }
+    useDownloadStore.getState().setProgress({
+      modelId,
+      received: Math.round(fraction * 1000),
+      total: 1000,
+    });
+  });
+  onParakeetDownloadError(({ modelId, message }) => {
+    useDownloadStore.getState().fail({ modelId, message });
+    useRecordingStore.getState().pushError({
+      noteId: null,
+      message: `Parakeet model download failed: ${message}`,
     });
   });
   // "Added to a workspace" notification. Watch the cloud status for workspaces

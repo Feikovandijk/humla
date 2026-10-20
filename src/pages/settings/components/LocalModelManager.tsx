@@ -9,12 +9,23 @@ function languageLabel(code: string | null): string {
   return found?.label ?? code;
 }
 
+// One-word character of each model, shown as the card's tag.
+const TAG: Record<string, string> = {
+  "large-v3-turbo-q5": "Recommended",
+  "large-v3": "Best quality",
+  "large-v3-q5": "Accurate",
+  "large-v2-q5": "Accented speech",
+  "medium-q5": "Balanced",
+  "small-q5": "Compact",
+  "base-q5": "Light",
+  "tiny-q5": "Fastest",
+};
+
 // The settings model list: one ModelDownloadCard per registry entry.
-// Multilingual models carry the default-model radio (they're candidates for
-// the default's model_id); language-specific models don't — they're picked
-// via per-language overrides. Download/delete route through the parent's
-// orchestrating handlers (auto-default promotion + suggest-override flash
-// live in useSettings, not here).
+// Multilingual models carry the default-model radio; language-specific
+// models don't — they're picked via per-language overrides. Download/delete
+// route through the parent's orchestrating handlers (auto-default promotion +
+// suggest-override flash live in useSettings, not here).
 export function LocalModelManager({
   state,
   activeId,
@@ -37,9 +48,9 @@ export function LocalModelManager({
   return (
     <>
       <p className="text-xs text-[var(--color-text-muted)] py-3">
-        Pick a multilingual model as the default for transcription. Language-
-        specific models (e.g. NB Whisper for Norwegian) sit alongside but are
-        picked via per-language overrides. All models run on-device via Metal.
+        Pick a multilingual model as the default for transcription. All models
+        run on-device via Metal. The registry has no language-specific model
+        today; the per-language path remains for future finetunes.
       </p>
       {state.models.map((m) => {
         const selectable = m.kind === "multilingual";
@@ -48,11 +59,7 @@ export function LocalModelManager({
           <ModelDownloadCard
             key={m.id}
             model={m}
-            tag={
-              m.kind === "multilingual"
-                ? "Multilingual"
-                : languageLabel(m.specificLanguage)
-            }
+            tag={m.kind === "multilingual" ? TAG[m.id] ?? "Multilingual" : languageLabel(m.specificLanguage)}
             selected={isActive}
             onSelect={selectable ? () => onSelect(m.id) : undefined}
             onDownload={onDownload}

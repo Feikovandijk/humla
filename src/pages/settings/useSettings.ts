@@ -4,19 +4,24 @@ import {
   onDiarizeDownloadProgress,
   onLocalWhisperDownloadError,
   onLocalWhisperProgress,
+  onParakeetDownloadError,
+  onParakeetProgress,
   type DiarizeEngine,
   type ProviderConfig,
   type TranscribeConfig,
 } from "../../lib/ipc";
 import { DIARIZE_ENGINE_LABEL, DIARIZE_ENGINES } from "../../lib/diarizeEngine";
 import { onSettingChange, writeSetting } from "../../lib/settingsBus";
+import { useDownloadStore } from "../../lib/store";
 import {
   DEFAULTS,
   EMPTY_DIARIZE_STATE,
   EMPTY_LOCAL_STATE,
+  EMPTY_PARAKEET_STATE,
   type DiarizeState,
   type EditableKey,
   type LocalState,
+  type ParakeetState,
 } from "./types";
 
 // One hook to own every piece of Settings page state plus the handlers
@@ -36,6 +41,7 @@ export function useSettings() {
       setDiarize((p) => ({ ...p, [engine]: f(p[engine]) })),
     [],
   );
+  const [parakeet, setParakeet] = useState<ParakeetState>(EMPTY_PARAKEET_STATE);
   const loadDiarizeStatuses = useCallback(async () => {
     const statuses = await Promise.all(
       DIARIZE_ENGINES.map((e) => ipc.diarizeStatus(e).catch(() => null)),
@@ -53,13 +59,15 @@ export function useSettings() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [models, cfg] = await Promise.all([
+      const [models, cfg, , parakeetStatus] = await Promise.all([
         ipc.localWhisperModels(),
         ipc.getTranscribeConfig().catch(() => null),
         loadDiarizeStatuses(),
+        ipc.parakeetStatus().catch(() => null),
       ]);
       if (cancelled) return;
       setLocal((p) => ({ ...p, models }));
+      setParakeet((p) => ({ ...p, status: parakeetStatus }));
       if (cfg) setTranscribeConfig(cfg);
       const entries = await Promise.all(
         (Object.keys(DEFAULTS) as EditableKey[]).map(
@@ -176,6 +184,41 @@ export function useSettings() {
       unlisten?.();
     };
   }, [updateDiarize]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    onParakeetProgress((p) => {
+      setParakeet((s) => ({
+        ...s,
+        downloading: true,
+        fraction: p.fraction,
+        phase: p.phase,
+      }));
+    }).then((u) => {
+      if (cancelled) u();
+      else unlisten = u;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    onParakeetDownloadError((e) => {
+      setParakeet((s) => ({ ...s, downloading: false, error: e.message }));
+    }).then((u) => {
+      if (cancelled) u();
+      else unlisten = u;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   // Local-model flash helper. 8s clear (instead of the 4s used by other
   // flashes) — gives the user time to read + act on the
@@ -318,6 +361,44 @@ export function useSettings() {
     }
   }
 
+  async function downloadParakeet() {
+    setParakeet((s) => ({ ...s, downloading: true, fraction: 0, phase: null, error: null }));
+    try {
+      await ipc.parakeetDownload();
+      const status = await ipc.parakeetStatus();
+      setParakeet((s) => ({ ...s, status, downloading: false, fraction: 1, phase: null }));
+      useDownloadStore.getState().clear();
+    } catch (e) {
+      const status = await ipc.parakeetStatus().catch(() => null);
+      setParakeet((s) => ({
+        ...s,
+        status,
+        downloading: false,
+        error: String(e),
+      }));
+      useDownloadStore.getState().clear();
+    }
+  }
+
+  async function deleteParakeet() {
+    try {
+      await ipc.parakeetDelete();
+      const status = await ipc.parakeetStatus();
+      setParakeet((s) => ({ ...s, status, error: null, fraction: 0, phase: null }));
+      // Never leave the default pointing at a model that is gone.
+      if (transcribeConfig.default.provider === "parakeet") {
+        await setDefaultConfig({
+          provider: "local",
+          model_id: "large-v3-turbo-q5",
+          preset: "quality",
+          use_gpu: true,
+        });
+      }
+    } catch (e) {
+      setParakeet((s) => ({ ...s, error: String(e) }));
+    }
+  }
+
   async function update(key: EditableKey, value: string) {
     setS((prev) => ({ ...prev, [key]: value }));
     await writeSetting(key, value);
@@ -373,6 +454,9 @@ export function useSettings() {
     diarize,
     downloadDiarize,
     deleteDiarize,
+    parakeet,
+    downloadParakeet,
+    deleteParakeet,
   };
 }
 

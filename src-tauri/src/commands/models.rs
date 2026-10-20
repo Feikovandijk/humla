@@ -1,5 +1,5 @@
-//! Model lifecycle commands — local Whisper model files + speaker
-//! diarization engine models. Download / status / delete, surfaced to
+//! Model lifecycle commands — local Whisper model files, Parakeet Ultra, and
+//! speaker diarization engine models. Download / status / delete, surfaced to
 //! the frontend via `commands::*` (re-exported from the parent module).
 //! `local_model_path` is also called by the recording / transcribe paths
 //! that stay in the parent module, hence `pub(crate)`.
@@ -42,6 +42,31 @@ pub async fn diarize_download(app: AppHandle, engine: Option<String>) -> Result<
 #[tauri::command]
 pub async fn diarize_delete(app: AppHandle, engine: Option<String>) -> Result<(), String> {
     diarize::delete(&app, parse_engine(engine)?).await.map_err(err)
+}
+
+// ---- Parakeet Ultra model management ---------------------------------------
+
+#[tauri::command]
+pub async fn parakeet_status(app: AppHandle) -> Result<diarize::ModelStatus, String> {
+    crate::parakeet::status(&app).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn parakeet_download(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    state.parakeet.shutdown().await;
+    crate::parakeet::download(&app).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn parakeet_delete(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    state.parakeet.shutdown().await;
+    crate::parakeet::delete(&app).await.map_err(err)
 }
 
 // ---- Local Whisper model management ----------------------------------------

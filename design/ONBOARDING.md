@@ -99,8 +99,8 @@ see Copy below.
 The local-vs-cloud fork. **Two cards, not a provider list**:
 
 - **Card A — "On-device" (recommended)**: private, free forever, works offline; honest size on the
-  card. Selecting it starts the background download of the model chosen by the step-3 answer:
-  Norwegian → `nb-whisper-large-q5` (~1.16 GB), everything else → `large-v3-turbo-q5` (~602 MB).
+  card. Selecting it starts the background download of `large-v3-turbo-q5` (~574 MB) for every
+  language; the multilingual turbo model is the one default.
   Download runs through steps 5–7 (`whisper_model_download` + `whisper_download_progress` event).
 - **Card B — "Cloud API"**: faster setup, no download, needs a key. Provider **dropdown inside the
   card** (OpenAI / Deepgram / Groq — the distinction is meaningless to a first-run user; don't

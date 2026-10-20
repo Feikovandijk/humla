@@ -51,12 +51,12 @@ Humla captures your microphone and your computer's audio (Zoom, Meet, Slack hudd
 
 Pick the transcription engine that fits, and you can mix-and-match **per language**:
 
-- **Local Whisper** — runs entirely on your Mac via Apple Silicon's GPU. Free after a one-time download. Multiple multilingual models plus a **Norwegian-tuned model** (NB Whisper Large from Nasjonalbiblioteket).
+- **Local Whisper** — runs entirely on your Mac via Apple Silicon's GPU. Eight multilingual whisper.cpp models, from tiny (~32 MB) to full-precision large-v3 (~3.1 GB), plus **Parakeet Ultra** for fast English/European transcription on the Neural Engine.
 - **OpenAI** — `whisper-1`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `gpt-4o-transcribe-diarize`.
 - **Deepgram** — Nova-3 / Nova-2, native diarization, very strong on conversational English.
 - **Groq** — `whisper-large-v3-turbo` at OpenAI-compatible endpoints — same Whisper quality, ~10× cheaper and faster than OpenAI's hosted Whisper.
 
-Set a **default provider** in Settings, then add **per-language overrides** if you want — e.g. *Norwegian → Local NB Whisper, English → Deepgram, fallback → OpenAI*. Humla picks the right one automatically based on the recording's language.
+Set a **default provider** in Settings, then add **per-language overrides** if you want — e.g. *Parakeet Ultra for English, Deepgram for another language, fallback → OpenAI*. Humla picks the right one automatically based on the recording's language.
 
 ### Identifies speakers, automatically and offline
 
@@ -155,7 +155,7 @@ The stack Humla Cloud uses, if you want somewhere to start:
 2. **Drag Humla** into Applications and open it. macOS Gatekeeper accepts the build directly because it's notarised.
 3. **Grant permissions** on first record: Microphone, and (for capturing system audio) Screen Recording. You'll need to relaunch after granting Screen Recording.
 4. **Pick your providers** in Settings → Transcription:
-   - Local Whisper alone is great if you don't want any cloud calls — click *Download* on a model (~500 MB–1.1 GB depending on which one).
+   - Local Whisper alone is great if you don't want any cloud calls — click *Download* on a model (~32 MB–3.1 GB depending on which one). Parakeet Ultra adds a ~630 MB Neural Engine model.
    - OR add an API key for OpenAI / Deepgram / Groq — keys live inline under the provider you pick, and go straight to the macOS Keychain.
 5. *Optional*: download a speaker-diarization model under Settings → Transcription → Speaker diarization (~30 MB).
 6. *Optional*: point Humla at a local LLM server (Ollama / LM Studio / llama.cpp) under Settings → Summary for fully on-device summaries, and under Settings → Chat for fully on-device chat.
@@ -251,7 +251,7 @@ humla/
 
 - **Frontend** — React 19 + Vite 6 + Tailwind v4 + Tiptap + Zustand + react-markdown + lucide-react
 - **App shell** — Tauri 2, Rust 1.85, reqwest (rustls-tls), rusqlite (bundled), tokio
-- **Local Whisper** — `whisper-rs` 0.16 (binds `whisper.cpp`) with the `metal` feature; `large-v3-turbo-q5` default plus alternative multilingual models and NB Whisper Large for Norwegian
+- **Local Whisper** — `whisper-rs` 0.16 (binds `whisper.cpp`) with the `metal` feature; `large-v3-turbo-q5` default plus seven multilingual alternatives, from tiny to full-precision large-v3. **Parakeet Ultra** runs separately through FluidAudio/CoreML on the Neural Engine.
 - **Speaker diarization** — FluidAudio Swift package; NVIDIA Nemotron 3 Diarization, *or* pyannote community-1 + VBx clustering with PLDA; CoreML on Apple Neural Engine
 - **Note chat** — agentic tool loop over three retrieval tools; hybrid search combining SQLite **FTS5** keyword ranking with semantic embedding similarity; OpenAI or Ollama as the chat provider
 - **MCP server** — `rmcp` (the official Rust MCP SDK) over stdio, built as a second binary from the same crate and signed into the app bundle; opens the notes database directly, so it runs with or without the app
@@ -262,9 +262,9 @@ humla/
 Humla stands on the shoulders of:
 
 - [whisper.cpp](https://github.com/ggml-org/whisper.cpp) by Georgi Gerganov — the local transcription engine
-- [FluidAudio](https://github.com/FluidInference/FluidAudio) — the offline diarization pipeline (Nemotron 3 Diarization and pyannote community-1 + VBx + PLDA, ported to CoreML)
+- [FluidAudio](https://github.com/FluidInference/FluidAudio) — the offline diarization pipeline (Nemotron 3 Diarization and pyannote community-1 + VBx + PLDA, ported to CoreML) and Parakeet ASR
 - [Nemotron 3 Diarization](https://huggingface.co/nvidia/Nemotron-3-Diarization) by NVIDIA — the default speaker-diarization model (OpenMDW-1.1)
-- [NB Whisper Large](https://huggingface.co/NbAiLab/nb-whisper-large) by Nasjonalbiblioteket — Norwegian-tuned Whisper model
+- [Parakeet Ultra](https://huggingface.co/moondream/parakeet-ultra) by moondream, built on NVIDIA's Parakeet TDT v3 — the optional Neural Engine transcription model (CC BY 4.0)
 - [Tauri](https://tauri.app) — the native app shell
 - [Tiptap](https://tiptap.dev) — the rich-text editor
 - [Granola](https://granola.ai) — the user-experience inspiration

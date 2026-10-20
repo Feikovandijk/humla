@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { DiarizeModelManager } from "../components/DiarizeModelManager";
 import { Disclosure } from "../components/Disclosure";
 import { LocalModelManager } from "../components/LocalModelManager";
+import { ParakeetModelManager } from "../components/ParakeetModelManager";
 import { PerLanguageOverrides } from "../components/PerLanguageOverrides";
 import { ProviderConfigForm } from "../components/ProviderConfigForm";
 import { Row, Section } from "../components/Section";
@@ -107,6 +108,9 @@ export function TranscriptionTab({
   diarize,
   downloadDiarize,
   deleteDiarize,
+  parakeet,
+  downloadParakeet,
+  deleteParakeet,
 }: Pick<
   SettingsHook,
   | "s"
@@ -121,6 +125,9 @@ export function TranscriptionTab({
   | "diarize"
   | "downloadDiarize"
   | "deleteDiarize"
+  | "parakeet"
+  | "downloadParakeet"
+  | "deleteParakeet"
 >) {
   const def = transcribeConfig.default;
 
@@ -138,7 +145,13 @@ export function TranscriptionTab({
             before recording.
           </p>
         )}
-        {def.provider !== "local" && (
+        {def.provider === "parakeet" && !parakeet.status?.downloaded && (
+          <p className="text-xs text-[var(--color-danger)] py-3">
+            Parakeet Ultra isn't downloaded. Download it under Advanced → Local
+            models before recording.
+          </p>
+        )}
+        {def.provider !== "local" && def.provider !== "parakeet" && (
           <ProviderKeyCard provider={def.provider as KeyProvider} />
         )}
         <Row
@@ -160,8 +173,8 @@ export function TranscriptionTab({
             <div className="text-sm">Per-language overrides</div>
             <p className="text-xs text-[var(--color-text-muted)] mt-0.5 mb-3">
               Route specific recording languages to a different provider than
-              the default above — e.g. NB Whisper for Norwegian, Deepgram
-              Nova-3 for English.
+              the default above — e.g. Parakeet Ultra for English, Deepgram
+              Nova-3 for another language.
             </p>
             <PerLanguageOverrides
               config={transcribeConfig}
@@ -172,6 +185,13 @@ export function TranscriptionTab({
           </div>
           <div>
             <div className="text-sm">Local models</div>
+            <ParakeetModelManager
+              state={parakeet}
+              selected={def.provider === "parakeet"}
+              onSelect={() => setDefaultConfig({ provider: "parakeet", model: "ultra" })}
+              onDownload={downloadParakeet}
+              onDelete={deleteParakeet}
+            />
             <LocalModelManager
               state={local}
               activeId={def.provider === "local" ? def.model_id : ""}

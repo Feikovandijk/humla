@@ -7,12 +7,13 @@ This file is the map. **`CLAUDE.md` is the full reference**: the reasoning behin
 ## Before you start
 
 - `CONTEXT.md`: the domain glossary (Note, Title, Folder, Client, Take…). Name concepts the way it names them.
-- `docs/adr/`: five decisions. Read the ones that touch your area, and say so if your change contradicts one.
+- `docs/adr/`: six decisions. Read the ones that touch your area, and say so if your change contradicts one.
   - 0001 Client is a distinct entity from Folder
   - 0002 No Person entity: speakers are derived
   - 0003 gpt-transcribe not adopted
   - 0004 The timeline is canonical for a note's content
   - 0005 Nemotron 3 is the default diarization engine
+  - 0006 Parakeet Ultra is a second on-device ASR engine; NB Whisper retired
 - `docs/agents/`: the issue tracker (GitHub `michaelwilhelmsen/humla` through `gh`), the triage labels and the domain-docs conventions.
 - `docs/research/`: measurements that back current thresholds (echo, STT, embeddings, MCP).
 

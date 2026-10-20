@@ -2613,15 +2613,17 @@ pub async fn recording_start(
     // setting mid-meeting must not change a capture already running, since half
     // a transcript is worse than either regime.
     //
-    // Only for on-device Whisper. What the setting buys is a Mac that isn't
-    // running Metal inference for the length of a meeting; a cloud provider
-    // dispatches over the network and costs the machine nothing, so deferring
-    // there would trade a live transcript for no saving at all. Resolved
-    // through the note's own language, so a per-language override that routes
-    // this note to Deepgram keeps its live transcript while a Norwegian note on
-    // local Whisper defers.
-    let sink_mode = if matches!(provider_cfg, crate::stt::ProviderConfig::Local(_))
-        && deferred_transcription_enabled(&app)
+    // Only for on-device models. What the setting buys is a Mac that isn't
+    // running Whisper/Metal or Parakeet/ANE inference for the length of a
+    // meeting; a cloud provider dispatches over the network and costs the
+    // machine nothing, so deferring there would trade a live transcript for no
+    // saving at all. Resolved through the note's own language, so a
+    // per-language override that routes this note to Deepgram keeps its live
+    // transcript while a local note defers.
+    let sink_mode = if matches!(
+        provider_cfg,
+        crate::stt::ProviderConfig::Local(_) | crate::stt::ProviderConfig::Parakeet(_)
+    ) && deferred_transcription_enabled(&app)
     {
         SinkMode::Deferred
     } else {
@@ -3537,6 +3539,22 @@ async fn ensure_provider_ready(
                 )
             }
         }
+        crate::stt::ProviderConfig::Parakeet(_) => {
+            if !crate::parakeet::supports_language(&language) {
+                Some(format!(
+                    "Parakeet Ultra doesn't support language '{language}'. Choose a Whisper model in Settings → Transcription."
+                ))
+            } else {
+                match crate::parakeet::status(app).await {
+                    Ok(s) if s.downloaded => None,
+                    Ok(_) => Some(
+                        "Parakeet Ultra model not downloaded. Download it in Settings → Transcription."
+                            .to_string(),
+                    ),
+                    Err(e) => Some(format!("Parakeet Ultra isn't available: {e}")),
+                }
+            }
+        }
         other => {
             let provider_id = other.provider_id();
             if read_provider_api_key(state, provider_id)?.is_none() {
@@ -3565,6 +3583,14 @@ async fn ensure_provider_ready(
                 }
             });
         }
+    }
+    if matches!(provider_cfg, crate::stt::ProviderConfig::Parakeet(_)) {
+        let manager = state.parakeet.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = manager.prewarm().await {
+                eprintln!("parakeet prewarm: {e}");
+            }
+        });
     }
     Ok(provider_cfg)
 }
@@ -7233,18 +7259,16 @@ async fn transcribe_chunk(
     // Phase 1 had only one cloud provider so a single Keychain slot was
     // sufficient; Phase 2 added Deepgram/Groq with their own slots, and
     // sending OpenAI's key to Deepgram naturally returns 401.
-    let api_key = match provider_cfg.provider_id() {
-        "local" => None,
-        provider_id => {
-            let state: State<AppState> = app.state();
-            Some(
-                read_provider_api_key(&state, provider_id)
-                    .map_err(|e| anyhow::anyhow!("{e}"))?
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("no API key stored for provider '{provider_id}'")
-                    })?,
-            )
-        }
+    let api_key = if crate::stt::requires_api_key(provider_cfg.provider_id()) {
+        let provider_id = provider_cfg.provider_id();
+        let state: State<AppState> = app.state();
+        Some(
+            read_provider_api_key(&state, provider_id)
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+                .ok_or_else(|| anyhow::anyhow!("no API key stored for provider '{provider_id}'"))?,
+        )
+    } else {
+        None
     };
 
     // Skip near-silent chunks. Whisper and gpt-4o-transcribe both hallucinate
@@ -7322,7 +7346,13 @@ async fn transcribe_chunk(
     } else {
         None
     };
-    let adapter = crate::stt::build_adapter(&provider_cfg, local_deps);
+    let parakeet = if matches!(provider_cfg, crate::stt::ProviderConfig::Parakeet(_)) {
+        let state: State<AppState> = app.state();
+        Some(state.parakeet.clone())
+    } else {
+        None
+    };
+    let adapter = crate::stt::build_adapter(&provider_cfg, local_deps, parakeet);
     let ctx = crate::stt::TranscribeCtx {
         model: provider_cfg.model(),
         language: &language,

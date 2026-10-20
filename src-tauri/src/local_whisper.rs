@@ -9,18 +9,16 @@ use crate::wav;
 // Catalog of GGML Whisper models the app can download. The first
 // Multilingual entry is the default — picked at first-run, used as a
 // fallback when the user's selected model isn't downloaded. Sizes are
-// approximate (HF doesn't always return Content-Length on the first
-// hop) and used as the progress bar's pre-stream estimate.
+// the exact HF blob sizes, used as the progress bar's pre-stream
+// estimate.
 //
 // Each model declares its language scope:
 //   - Multilingual: handles any language. These are the user-pickable
 //     general-purpose models, one of which is always the active default.
-//   - LanguageSpecific { language }: specialised for one ISO 639-1
-//     language. Never the default; selected via a per-language override
-//     in `transcribe_config.per_language`. NB Whisper Large is finetuned
-//     by Nasjonalbiblioteket on Norwegian and produces noticeably worse
-//     output on other languages — that's why it's tagged here instead
-//     of being a general option in the picker.
+//   - LanguageSpecific { language }: reserved for future finetunes that
+//     are useful for exactly one ISO 639-1 language. Never the default;
+//     selected via a per-language override in
+//     `transcribe_config.per_language`. No such model ships today.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModelKind {
     Multilingual,
@@ -58,8 +56,17 @@ const MODELS: &[ModelInfo] = &[
         label: "Large v3 Turbo (quantized)",
         filename: "ggml-large-v3-turbo-q5_0.bin",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
-        size_bytes_hint: 601_620_480,
+        size_bytes_hint: 574_041_195,
         description: "Multilingual. ~10× realtime on Apple Silicon. The recommended default for almost all use.",
+        kind: ModelKind::Multilingual,
+    },
+    ModelInfo {
+        id: "large-v3",
+        label: "Large v3 (full precision)",
+        filename: "ggml-large-v3.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
+        size_bytes_hint: 3_095_033_483,
+        description: "Multilingual. Full-precision Large v3 — the highest-accuracy Whisper. ~3.1 GB; best on Macs with 32 GB or more.",
         kind: ModelKind::Multilingual,
     },
     ModelInfo {
@@ -67,8 +74,8 @@ const MODELS: &[ModelInfo] = &[
         label: "Large v3 (quantized)",
         filename: "ggml-large-v3-q5_0.bin",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin",
-        size_bytes_hint: 1_159_868_416,
-        description: "Multilingual. The non-turbo Large v3 — slower than Turbo but the highest-accuracy baseline on dense or noisy audio.",
+        size_bytes_hint: 1_081_140_203,
+        description: "Multilingual. The non-turbo Large v3 — slower than Turbo but the highest-accuracy quantized baseline on dense or noisy audio.",
         kind: ModelKind::Multilingual,
     },
     ModelInfo {
@@ -76,7 +83,7 @@ const MODELS: &[ModelInfo] = &[
         label: "Large v2 (quantized)",
         filename: "ggml-large-v2-q5_0.bin",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v2-q5_0.bin",
-        size_bytes_hint: 1_159_868_416,
+        size_bytes_hint: 1_080_732_091,
         description: "Multilingual. The previous Large generation — sometimes preferable to v3 on accented speech where v3 introduced regressions.",
         kind: ModelKind::Multilingual,
     },
@@ -85,18 +92,36 @@ const MODELS: &[ModelInfo] = &[
         label: "Medium (quantized)",
         filename: "ggml-medium-q5_0.bin",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin",
-        size_bytes_hint: 565_182_464,
+        size_bytes_hint: 539_212_467,
         description: "Multilingual. Smaller and faster than Large on slower hardware; lower accuracy on dense or technical speech.",
         kind: ModelKind::Multilingual,
     },
     ModelInfo {
-        id: "nb-whisper-large-q5",
-        label: "NB Whisper Large",
-        filename: "nb-whisper-large-q5_0.bin",
-        url: "https://huggingface.co/NbAiLab/nb-whisper-large/resolve/main/ggml-model-q5_0.bin",
-        size_bytes_hint: 1_159_237_632,
-        description: "Norwegian-finetuned by Nasjonalbiblioteket. Pick this as a per-language override for Norwegian recordings — produces noticeably worse output on English or other languages.",
-        kind: ModelKind::LanguageSpecific { language: "no" },
+        id: "small-q5",
+        label: "Small (quantized)",
+        filename: "ggml-small-q5_1.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
+        size_bytes_hint: 190_085_487,
+        description: "Multilingual. A good middle ground for Intel Macs and memory-constrained systems; less accurate than Medium.",
+        kind: ModelKind::Multilingual,
+    },
+    ModelInfo {
+        id: "base-q5",
+        label: "Base (quantized)",
+        filename: "ggml-base-q5_1.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin",
+        size_bytes_hint: 59_707_625,
+        description: "Multilingual. Small and quick; usable for clear dictation, weaker on meetings and accents.",
+        kind: ModelKind::Multilingual,
+    },
+    ModelInfo {
+        id: "tiny-q5",
+        label: "Tiny (quantized)",
+        filename: "ggml-tiny-q5_1.bin",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin",
+        size_bytes_hint: 32_152_673,
+        description: "Multilingual. The smallest and fastest; for quick notes on slow hardware, not meetings.",
+        kind: ModelKind::Multilingual,
     },
 ];
 
@@ -561,6 +586,29 @@ mod tests {
     #[test]
     fn dtw_stays_off() {
         assert!(matches!(context_params(true).dtw_parameters.mode, DtwMode::None));
+    }
+
+    #[test]
+    fn registry_is_the_eight_whisper_models() {
+        assert_eq!(models().len(), 8);
+        assert_eq!(models()[0].id, DEFAULT_MODEL_ID);
+        assert!(find_model("nb-whisper-large-q5").is_none());
+        for m in models() {
+            assert_eq!(m.kind, ModelKind::Multilingual, "{} must be multilingual", m.id);
+        }
+    }
+
+    #[test]
+    fn registry_ids_filenames_and_urls_are_unique() {
+        let mut ids = std::collections::HashSet::new();
+        let mut files = std::collections::HashSet::new();
+        let mut urls = std::collections::HashSet::new();
+        for m in models() {
+            assert!(ids.insert(m.id), "duplicate id {}", m.id);
+            assert!(files.insert(m.filename), "duplicate filename {}", m.filename);
+            assert!(urls.insert(m.url), "duplicate url {}", m.url);
+            assert!(m.size_bytes_hint > 0, "{} has no size hint", m.id);
+        }
     }
 }
 

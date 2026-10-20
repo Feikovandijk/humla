@@ -135,7 +135,7 @@ describe("onboarding TranscriptionStep — layout", () => {
     ).not.toContainElement(badges[0]);
   });
 
-  it("routes Norwegian to the National Library model", async () => {
+  it("always selects the multilingual turbo model, whatever the language", async () => {
     const downloads: string[] = [];
     let written: TranscribeConfig | null = null;
     const dl = deferred<null>();
@@ -152,13 +152,9 @@ describe("onboarding TranscriptionStep — layout", () => {
       },
     });
 
-    expect(
-      await screen.findByText(/national library of norway/i),
-    ).toBeInTheDocument();
-
     await userEvent.click(await onDeviceCard());
-    await waitFor(() => expect(downloads).toEqual([NB]));
-    expect(written!.default).toMatchObject({ provider: "local", model_id: NB });
+    await waitFor(() => expect(downloads).toEqual([TURBO]));
+    expect(written!.default).toMatchObject({ provider: "local", model_id: TURBO });
 
     dl.resolve(null);
   });
@@ -221,22 +217,16 @@ describe("onboarding TranscriptionStep — on-device download flow", () => {
     act(() => useDownloadStore.getState().clear());
   });
 
-  // #148 — the on-device model is derived from the meeting language, but the
-  // config was only ever written from the card's click handler. Going back to
-  // change the language left the card advertising NB Whisper while the stored
-  // config still routed to the multilingual turbo model, with Continue enabled
-  // and NB Whisper never downloaded. Same root cause as #147, but silent.
-  it("reconciles the stored config when the language changed after On-device was chosen", async () => {
+  // #148 — the advertised model is fixed now, but a stored config can still
+  // name a retired model. Resuming the step must reconcile it to the turbo
+  // default and fetch that model, without touching per-language overrides.
+  it("reconciles a stored retired model to the turbo default", async () => {
     const downloads: string[] = [];
     let written: TranscribeConfig | null = null;
     const dl = deferred<null>();
     renderStep({
-      // Language is now Norwegian…
-      settings_get: (args) =>
-        (args as { key: string }).key === "language" ? "no" : null,
-      // …but the stored config is from the earlier English pass.
       get_transcribe_config: () => ({
-        default: { provider: "local", model_id: TURBO, preset: "quality", use_gpu: true },
+        default: { provider: "local", model_id: NB, preset: "quality", use_gpu: true },
         per_language: { fr: { provider: "deepgram", model: "nova-3" } },
       }),
       set_transcribe_config: (args) => {
@@ -249,29 +239,21 @@ describe("onboarding TranscriptionStep — on-device download flow", () => {
       },
     });
 
-    // The card resumes as selected and advertises the Norwegian model...
-    expect(
-      await screen.findByText(/national library of norway/i),
-    ).toBeInTheDocument();
-
-    // ...so the stored config must agree, with no user interaction at all.
+    // The stored config is rewritten to the current default with no user
+    // interaction at all.
     await waitFor(() =>
-      expect(written!.default).toMatchObject({ provider: "local", model_id: NB }),
+      expect(written!.default).toMatchObject({ provider: "local", model_id: TURBO }),
     );
     // Per-language overrides survive the reconciliation.
     expect(written!.per_language).toMatchObject({ fr: { provider: "deepgram" } });
     // And the model it now claims is actually being fetched.
-    await waitFor(() => expect(downloads).toEqual([NB]));
+    await waitFor(() => expect(downloads).toEqual([TURBO]));
 
-    // The card's download state describes NB, not the turbo model it used to.
     expect(
       await screen.findByText(/you can continue while it finishes/i),
     ).toBeInTheDocument();
-    storeProgress(NB, 580_000_000, 1_160_000_000);
+    storeProgress(TURBO, 287_000_000, 574_000_000);
     expect(await screen.findByText(/downloading/i)).toBeInTheDocument();
-    // A stale progress event for the old model must not be adopted.
-    storeProgress(TURBO, 574_000_000, 574_000_000);
-    await waitFor(() => expect(screen.queryByText(/model ready/i)).toBeNull());
 
     dl.resolve(null);
     act(() => useDownloadStore.getState().clear());
@@ -279,15 +261,13 @@ describe("onboarding TranscriptionStep — on-device download flow", () => {
 
   // The reconciliation must be idempotent: this step re-renders on every
   // download-store tick, and a write per tick would hammer the DB.
-  it("writes nothing when the stored config already names the derived model", async () => {
+  it("writes nothing when the stored config already names the default", async () => {
     let writes = 0;
     const downloads: string[] = [];
     renderStep({
-      settings_get: (args) =>
-        (args as { key: string }).key === "language" ? "no" : null,
       local_whisper_models: () => whisperModels(),
       get_transcribe_config: () => ({
-        default: { provider: "local", model_id: NB, preset: "quality", use_gpu: true },
+        default: { provider: "local", model_id: TURBO, preset: "quality", use_gpu: true },
         per_language: {},
       }),
       set_transcribe_config: () => {
@@ -300,15 +280,13 @@ describe("onboarding TranscriptionStep — on-device download flow", () => {
       },
     });
 
-    expect(
-      await screen.findByText(/national library of norway/i),
-    ).toBeInTheDocument();
+    await onDeviceCard();
 
     // Several store ticks' worth of re-renders (this is the back-navigation
     // path: a live download for this model makes the panel show).
-    storeProgress(NB, 100, 1000);
-    storeProgress(NB, 400, 1000);
-    storeProgress(NB, 900, 1000);
+    storeProgress(TURBO, 100, 1000);
+    storeProgress(TURBO, 400, 1000);
+    storeProgress(TURBO, 900, 1000);
     await waitFor(() => expect(screen.getByText(/downloading/i)).toBeInTheDocument());
     expect(writes).toBe(0);
 
@@ -319,39 +297,6 @@ describe("onboarding TranscriptionStep — on-device download flow", () => {
     expect(downloads).toHaveLength(0); // already in flight per the store
 
     act(() => useDownloadStore.getState().clear());
-  });
-
-  // Found reviewing the #148 fix. `language` is read with a catch, and a failed
-  // read is indistinguishable from an unset one — both route to the default
-  // model. Left unguarded, the reconcile effect would "correct" a perfectly good
-  // Norwegian config down to the default and fetch a gigabyte to do it.
-  it("does not rewrite a stored config when the language read failed", async () => {
-    let writes = 0;
-    const downloads: string[] = [];
-    renderStep({
-      settings_get: (args) => {
-        if ((args as { key: string }).key === "language") throw new Error("db locked");
-        return null;
-      },
-      get_transcribe_config: () => ({
-        default: { provider: "local", model_id: NB, preset: "quality", use_gpu: true },
-        per_language: {},
-      }),
-      set_transcribe_config: () => {
-        writes++;
-        return null;
-      },
-      local_whisper_download: (args) => {
-        downloads.push((args as { modelId: string }).modelId);
-        return null;
-      },
-    });
-
-    await onDeviceCard(); // the step still renders and is usable
-    await new Promise((r) => setTimeout(r, 50));
-
-    expect(writes).toBe(0);
-    expect(downloads).toHaveLength(0);
   });
 
   // Found reviewing the #148 fix. A failed config write must not be silent:

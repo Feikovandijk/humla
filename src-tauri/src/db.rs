@@ -3109,6 +3109,60 @@ pub fn migrate_per_language_v4(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// One-shot model-retirement migration: retire NB Whisper. The model is no
+/// longer in the registry, so a stored default or per-language override
+/// pointing at it would otherwise keep showing up as an unknown/missing model. Rewrite the
+/// default to the multilingual turbo model and drop per-language overrides
+/// that named it; delete the orphaned model file once.
+///
+/// Flag-guarded because the file delete must not repeat, and because a user
+/// who deliberately re-downloads the old blob by hand shouldn't lose it on
+/// every launch.
+pub fn migrate_retired_whisper_models(conn: &Connection, models_dir: &Path) -> Result<()> {
+    const FLAG: &str = "nb_whisper_retired_v1";
+    const NB: &str = "nb-whisper-large-q5";
+    if get_setting(conn, FLAG)?.as_deref() == Some("true") {
+        return Ok(());
+    }
+
+    if let Some(raw) = get_setting(conn, "transcribe_config")? {
+        if let Ok(mut cfg) = serde_json::from_str::<crate::stt::TranscribeConfig>(&raw) {
+            let mut changed = false;
+            if matches!(&cfg.default, crate::stt::ProviderConfig::Local(c) if c.model_id == NB) {
+                if let crate::stt::ProviderConfig::Local(c) = &mut cfg.default {
+                    c.model_id = crate::local_whisper::DEFAULT_MODEL_ID.to_string();
+                }
+                changed = true;
+            }
+            let before = cfg.per_language.len();
+            cfg.per_language.retain(|_, p| {
+                !matches!(p, crate::stt::ProviderConfig::Local(c) if c.model_id == NB)
+            });
+            changed |= cfg.per_language.len() != before;
+            if changed {
+                let json = serde_json::to_string(&cfg)
+                    .map_err(|e| anyhow::anyhow!("serialize transcribe_config: {e}"))?;
+                set_setting(conn, "transcribe_config", &json)?;
+            }
+        }
+    }
+
+    for name in [
+        "nb-whisper-large-q5_0.bin",
+        "nb-whisper-large-q5_0.bin.partial",
+    ] {
+        let path = models_dir.join(name);
+        if path.exists() {
+            if let Err(e) = std::fs::remove_file(&path) {
+                eprintln!("retired NB Whisper: remove {} failed: {e}", path.display());
+            }
+        }
+    }
+
+    set_setting(conn, FLAG, "true")?;
+    Ok(())
+}
+
 /// v0.31 grandfathering: mark existing installs so the first-run onboarding
 /// wizard never appears for anyone already using Humla. Writes
 /// `onboarding_completed = "true"` when the DB looks lived-in.
@@ -4000,6 +4054,45 @@ mod tests {
         // fallback. We assert the error type only to document
         // behaviour, not to require the caller to surface it.
         assert!(migrate_per_language_v4(&conn).is_err());
+    }
+
+    #[test]
+    fn migrate_retired_whisper_models_rewrites_config_and_deletes_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = settings_only_conn();
+        let models = dir.path().join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        let nb = models.join("nb-whisper-large-q5_0.bin");
+        let partial = models.join("nb-whisper-large-q5_0.bin.partial");
+        std::fs::write(&nb, b"old").unwrap();
+        std::fs::write(&partial, b"partial").unwrap();
+        set_setting(
+            &conn,
+            "transcribe_config",
+            r#"{"default":{"provider":"local","model_id":"nb-whisper-large-q5","preset":"quality","use_gpu":true},"per_language":{"no":{"provider":"local","model_id":"nb-whisper-large-q5","preset":"quality","use_gpu":true},"en":{"provider":"deepgram","model":"nova-3"}}}"#,
+        )
+        .unwrap();
+
+        migrate_retired_whisper_models(&conn, &models).unwrap();
+
+        let cfg: crate::stt::TranscribeConfig =
+            serde_json::from_str(&get_setting(&conn, "transcribe_config").unwrap().unwrap())
+                .unwrap();
+        assert_eq!(cfg.default.provider_id(), "local");
+        assert_eq!(cfg.default.model(), "large-v3-turbo-q5");
+        assert!(!cfg.per_language.contains_key("no"));
+        assert!(cfg.per_language.contains_key("en"));
+        assert!(!nb.exists());
+        assert!(!partial.exists());
+        assert_eq!(
+            get_setting(&conn, "nb_whisper_retired_v1").unwrap().as_deref(),
+            Some("true")
+        );
+
+        // One-shot: a file that appears later is left alone.
+        std::fs::write(&nb, b"new").unwrap();
+        migrate_retired_whisper_models(&conn, &models).unwrap();
+        assert!(nb.exists());
     }
 
     #[test]

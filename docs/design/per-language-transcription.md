@@ -1,9 +1,14 @@
 # Per-language transcription model routing
 
-**Status:** Design draft (Phase 4 scoping). Not yet implemented.
+**Status:** Historical design draft (Phase 4 scoping; the mechanism shipped, but NB Whisper was later retired).
 **Author:** Claude (with Michael)
 **Date:** 2026-05-07
 **References:** `docs/design/stt-adapter.md`, Phase 1–3 implementation plans.
+
+> **Editor's note (2026):** NB Whisper was removed and its Norwegian routing retired. The
+> `transcribe_config` / per-language mechanism described here is unchanged; read every
+> NB-specific example as an illustration of the mechanism, not a current model choice.
+
 
 ---
 

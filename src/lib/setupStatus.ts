@@ -29,7 +29,7 @@ export type SttStatus = {
   // will actually work right now.
   working: boolean;
   // What KIND of path the default config points at, for display:
-  //   "local"  — on-device Whisper (working iff the model file is present)
+  //   "local"  — on-device Whisper or Parakeet (working iff the model is ready)
   //   "cloud"  — a cloud provider (working iff its API key is stored)
   //   "none"   — the fresh-install fallback (openai, no key) → not working
   kind: "local" | "cloud" | "none";
@@ -69,10 +69,11 @@ export type SetupStatus = {
 // render time by the consumers (SetupNag, Done) from the store slice; the
 // `stt.downloading` field exists for that merge.
 export async function computeSetupStatus(): Promise<SetupStatus> {
-  const [perm, cfg, models, language, summaryProvider] = await Promise.all([
+  const [perm, cfg, models, parakeet, language, summaryProvider] = await Promise.all([
     ipc.permissionsStatus().catch(() => null),
     ipc.getTranscribeConfig().catch(() => null),
     ipc.localWhisperModels().catch(() => []),
+    ipc.parakeetStatus().catch(() => null),
     ipc.getSetting("language").catch(() => null),
     ipc.getSetting("summary_provider").catch(() => null),
   ]);
@@ -94,6 +95,13 @@ export async function computeSetupStatus(): Promise<SetupStatus> {
       kind: "local",
       provider: "local",
       model: modelId,
+    };
+  } else if (def?.provider === "parakeet") {
+    stt = {
+      working: parakeet?.downloaded ?? false,
+      kind: "local",
+      provider: "parakeet",
+      model: "parakeet-ultra",
     };
   } else if (def && isCloudProvider(def.provider)) {
     // Shared with the onboarding resume so the two can't disagree on what

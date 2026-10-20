@@ -9,6 +9,7 @@ mod keychain;
 mod local;
 mod openai;
 mod openai_compat;
+mod parakeet;
 
 use std::path::PathBuf;
 
@@ -16,13 +17,14 @@ pub use adapter::{BatchSttAdapter, TranscribeCtx, TranscribeResult, Word};
 pub use auth::Auth;
 pub use config::{
     from_legacy_settings, DeepgramConfig, GroqConfig, LocalWhisperConfig, OpenAiConfig,
-    ProviderConfig, TranscribeConfig,
+    ParakeetConfig, ProviderConfig, TranscribeConfig,
 };
 pub use keychain::{keychain_account_for, requires_api_key};
 pub use deepgram::DeepgramAdapter;
 pub use groq::GroqAdapter;
 pub use local::LocalWhisperAdapter;
 pub use openai::OpenAiAdapter;
+pub use parakeet::ParakeetAdapter;
 
 use crate::local_whisper;
 
@@ -41,12 +43,13 @@ pub struct LocalDeps {
 /// dyn-dispatched; allocation cost is irrelevant next to network or
 /// inference latency.
 ///
-/// `local_deps` is required for `ProviderConfig::Local` and unused for
-/// other variants. Constructed by the caller because `ProviderConfig`
-/// can't carry runtime state.
+/// `local_deps` is required for `ProviderConfig::Local`; `parakeet` is
+/// required for `ProviderConfig::Parakeet`. Constructed by the caller because
+/// `ProviderConfig` can't carry runtime state.
 pub fn build_adapter(
     cfg: &ProviderConfig,
     local_deps: Option<LocalDeps>,
+    parakeet: Option<std::sync::Arc<crate::parakeet::ParakeetManager>>,
 ) -> Box<dyn BatchSttAdapter> {
     match cfg {
         ProviderConfig::OpenAi(_) => Box::new(OpenAiAdapter::new()),
@@ -61,6 +64,10 @@ pub fn build_adapter(
         }
         ProviderConfig::Groq(_) => Box::new(GroqAdapter::new()),
         ProviderConfig::Deepgram(_) => Box::new(DeepgramAdapter::new()),
+        ProviderConfig::Parakeet(_) => {
+            let manager = parakeet.expect("ParakeetManager required for ProviderConfig::Parakeet");
+            Box::new(ParakeetAdapter::new(manager))
+        }
     }
 }
 
@@ -74,7 +81,7 @@ mod tests {
             model: "whisper-1".to_string(),
             base_url: None,
         });
-        let adapter = build_adapter(&cfg, None);
+        let adapter = build_adapter(&cfg, None, None);
         assert_eq!(adapter.provider_id(), "openai");
     }
 
@@ -93,7 +100,7 @@ mod tests {
             model_path: PathBuf::from("/tmp/test.bin"),
             use_gpu: true,
         };
-        let adapter = build_adapter(&cfg, Some(deps));
+        let adapter = build_adapter(&cfg, Some(deps), None);
         assert_eq!(adapter.provider_id(), "local");
     }
 
@@ -105,6 +112,16 @@ mod tests {
             preset: "quality".to_string(),
             use_gpu: true,
         });
-        let _ = build_adapter(&cfg, None);
+        let _ = build_adapter(&cfg, None, None);
+    }
+
+    #[test]
+    fn build_parakeet_adapter_returns_parakeet() {
+        let cfg = ProviderConfig::Parakeet(ParakeetConfig {
+            model: "ultra".to_string(),
+        });
+        let manager = std::sync::Arc::new(crate::parakeet::ParakeetManager::new(None));
+        let adapter = build_adapter(&cfg, None, Some(manager));
+        assert_eq!(adapter.provider_id(), "parakeet");
     }
 }

@@ -31,7 +31,7 @@ export function PerLanguageOverrides({
       <p className="text-xs text-[var(--color-text-muted)]">
         Override the default provider for specific recording languages.
         Useful when one model is materially better for a given language —
-        e.g. NB Whisper for Norwegian, Deepgram Nova-3 for English.
+        e.g. Parakeet Ultra for English, Deepgram Nova-3 for another.
       </p>
 
       {entries.length > 0 ? (
@@ -117,6 +117,8 @@ function summariseProvider(cfg: ProviderConfig): string {
       return `Groq · ${cfg.model}`;
     case "local":
       return `Local · ${cfg.model_id} · ${cfg.preset} preset · GPU ${cfg.use_gpu ? "on" : "off"}`;
+    case "parakeet":
+      return `Parakeet · ${cfg.model}`;
   }
 }
 
