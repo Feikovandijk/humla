@@ -95,7 +95,7 @@ const DIARIZE_MODEL_MISSING_UNLABELLED: &str = "Speaker diarization model isn't 
 // silence_rms_threshold setting for noisy environments.
 const DEFAULT_SILENCE_RMS_THRESHOLD: f32 = 0.005;
 
-// `keep_audio` defaults off. Its value is read through
+// `keep_audio` defaults on. Its value is read through
 // `sessions::retain_audio` (which owns the default) via `keep_audio_enabled`;
 // off means recordings live in the temp dir for the post-stop pipeline and are
 // deleted at the end, with no playback.wav and no source copies left behind.

@@ -194,3 +194,126 @@ pub fn note_diagnostics_files(app: AppHandle, note_id: String) -> Result<Vec<Str
     out.sort();
     Ok(out)
 }
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingAudio {
+    session_id: String,
+    session_index: u32,
+    source: crate::recording::ChunkSource,
+}
+
+/// List only raw streams still available locally, including legacy takes.
+#[tauri::command]
+pub fn note_recording_audio(app: AppHandle, note_id: String) -> Result<Vec<RecordingAudio>, String> {
+    if !crate::sessions::is_safe_session_id(&note_id) {
+        return Err("invalid note id".into());
+    }
+    let app_dir = app.path().app_data_dir().map_err(err)?;
+    let recordings = crate::sessions::recordings_dir(&app_dir, &note_id);
+    let mut files = Vec::new();
+    for (session, dir) in crate::sessions::resolve_sessions(&recordings) {
+        for source in [crate::recording::ChunkSource::Mic, crate::recording::ChunkSource::Sys] {
+            if dir.join(format!("{}.wav", source.as_str())).is_file() {
+                files.push(RecordingAudio {
+                    session_id: session.id.clone(),
+                    session_index: session.index,
+                    source,
+                });
+            }
+        }
+    }
+    Ok(files)
+}
+
+fn copy_recording_audio(
+    recordings: &std::path::Path,
+    session_id: &str,
+    source: crate::recording::ChunkSource,
+    destination: &std::path::Path,
+) -> Result<(), String> {
+    let dir = crate::sessions::resolve_session_dir(recordings, session_id)
+        .ok_or_else(|| "recording session not found".to_string())?;
+    let path = dir.join(format!("{}.wav", source.as_str()));
+    let path = path.canonicalize().map_err(|e| format!("recording audio unavailable: {e}"))?;
+    if !path.starts_with(recordings.canonicalize().map_err(err)?) {
+        return Err("audio outside recording directory".into());
+    }
+    // Never overwrite retained audio, even if the save panel points back into it.
+    let parent = destination.parent().ok_or("invalid export path")?.canonicalize().map_err(err)?;
+    let target = destination.canonicalize().unwrap_or_else(|_| {
+        parent.join(destination.file_name().unwrap_or_default())
+    });
+    let root = recordings.parent().ok_or("invalid recordings directory")?.canonicalize().map_err(err)?;
+    if target.starts_with(root) {
+        return Err("choose an export location outside stored recordings".into());
+    }
+    std::fs::copy(path, destination).map_err(|e| format!("export recording: {e}"))?;
+    Ok(())
+}
+
+/// Copy a raw WAV to the path selected in the native save panel.
+#[tauri::command]
+pub async fn export_recording_audio(
+    app: AppHandle,
+    note_id: String,
+    session_id: String,
+    source: crate::recording::ChunkSource,
+    path: String,
+) -> Result<(), String> {
+    if !crate::sessions::is_safe_session_id(&note_id) {
+        return Err("invalid note id".into());
+    }
+    let app_dir = app.path().app_data_dir().map_err(err)?;
+    let recordings = crate::sessions::recordings_dir(&app_dir, &note_id);
+    tauri::async_runtime::spawn_blocking(move || {
+        copy_recording_audio(&recordings, &session_id, source, std::path::Path::new(&path))
+    }).await.map_err(err)?
+}
+
+#[cfg(test)]
+mod recording_export_tests {
+    use super::*;
+    use crate::recording::ChunkSource;
+    use std::{fs, path::Path};
+
+    #[test]
+    fn exports_the_requested_raw_stream_without_touching_the_original() {
+        let tmp = tempfile::tempdir().unwrap();
+        let recordings = tmp.path().join("recordings/note1");
+        fs::create_dir_all(recordings.join("take1")).unwrap();
+        crate::sessions::append_session(&recordings, "take1", "", 1000,
+            vec!["mic".into(), "sys".into()], crate::sessions::Transcribed::Yes).unwrap();
+        fs::write(recordings.join("take1/mic.wav"), b"microphone").unwrap();
+        fs::write(recordings.join("take1/sys.wav"), b"system").unwrap();
+        let destination = tmp.path().join("export.wav");
+        copy_recording_audio(&recordings, "take1", ChunkSource::Sys, &destination).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"system");
+        assert_eq!(fs::read(recordings.join("take1/sys.wav")).unwrap(), b"system");
+        assert!(copy_recording_audio(&recordings, "../take1", ChunkSource::Mic, &destination).is_err());
+        assert!(copy_recording_audio(&recordings, "missing", ChunkSource::Mic, &destination).is_err());
+        assert!(copy_recording_audio(&recordings, "take1", ChunkSource::Mic,
+            &recordings.join("take1/sys.wav")).is_err());
+        assert_eq!(fs::read(recordings.join("take1/sys.wav")).unwrap(), b"system");
+    }
+
+    #[test]
+    fn legacy_audio_exports_and_missing_or_external_streams_fail() {
+        let tmp = tempfile::tempdir().unwrap();
+        let recordings = tmp.path().join("recordings/note1");
+        fs::create_dir_all(&recordings).unwrap();
+        fs::write(recordings.join("mic.wav"), b"legacy mic").unwrap();
+        let destination = tmp.path().join("export.wav");
+        copy_recording_audio(&recordings, crate::sessions::LEGACY_SESSION_ID,
+            ChunkSource::Mic, &destination).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"legacy mic");
+        assert!(copy_recording_audio(&recordings, crate::sessions::LEGACY_SESSION_ID,
+            ChunkSource::Sys, Path::new("/missing/export.wav")).is_err());
+        let secret = tmp.path().join("secret.wav");
+        fs::write(&secret, b"outside").unwrap();
+        std::os::unix::fs::symlink(&secret, recordings.join("sys.wav")).unwrap();
+        assert!(copy_recording_audio(&recordings, crate::sessions::LEGACY_SESSION_ID,
+            ChunkSource::Sys, &destination).is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"legacy mic");
+    }
+}

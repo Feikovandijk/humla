@@ -40,7 +40,7 @@ export const DEFAULTS: Record<EditableKey, string> = {
   default_summary_preset: "meeting",
   diarize_model: DEFAULT_DIARIZE_ENGINE,
   community1_threshold: "0.5",
-  keep_audio: "false",
+  keep_audio: "true",
   transcribe_manually: "false",
   keep_awake: "true",
   close_to_tray: "false",
