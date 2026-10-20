@@ -116,11 +116,11 @@ impl TranscribeConfig {
     }
 
     /// Sensible default for fresh installs and for recovering from a
-    /// corrupt `transcribe_config` row. Matches the bare-default
-    /// produced by `from_legacy_settings(None, …)` in v0.23, wrapped.
+    /// corrupt `transcribe_config` row: on-device Whisper, the recommended
+    /// multilingual model.
     pub fn default_fallback() -> Self {
         Self {
-            default: from_legacy_settings(None, None, None, None, None),
+            default: from_legacy_settings(Some("local"), None, None, None, None),
             per_language: BTreeMap::new(),
         }
     }
