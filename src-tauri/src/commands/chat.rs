@@ -60,7 +60,7 @@ fn chat_api_key(state: &State<AppState>) -> Option<String> {
             .flatten()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "openai".into())
+            .unwrap_or_else(|| "local".into())
     };
     match ProviderId::parse(&stored) {
         Some(id) if id.keychain_account().is_some() => {
@@ -494,7 +494,7 @@ fn resolve_chat(
             .filter(|s| !s.is_empty()))
     };
 
-    let provider = setting("chat_provider")?.unwrap_or_else(|| "openai".into());
+    let provider = setting("chat_provider")?.unwrap_or_else(|| "local".into());
     let model_setting = setting("chat_model")?;
     let id = ProviderId::parse(&provider)
         .filter(|p| p.capabilities().chat)

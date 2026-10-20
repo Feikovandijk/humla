@@ -4,128 +4,61 @@ import { Select } from "../../../components/ui/Select";
 import { Toggle } from "../components/Toggle";
 import { SummaryPromptsManager } from "../components/SummaryPromptsManager";
 import { OllamaConnect } from "../../../components/provider/OllamaConnect";
-import { ProviderKeyCard } from "../../../components/provider/ProviderKeyCard";
 import { CommandSnippet } from "../../../components/CommandSnippet";
 import { RECOMMENDED_OLLAMA_MODEL, RECOMMENDED_OLLAMA_MODEL_16GB } from "../../../lib/localModels";
 import { SUMMARY_PRESETS, presetLabel } from "../../../lib/presets";
-import { useCloudModels } from "../../../components/provider/useCloudModels";
-import { useProviderKey } from "../../../components/provider/useProviderKey";
-import { SUMMARY_PROVIDERS } from "../types";
 import type { SettingsHook } from "../useSettings";
 
+// Summaries run on a local LLM server only; useSettings pins
+// `summary_provider` to local.
 export function SummaryTab({
   s,
   update,
 }: Pick<SettingsHook, "s" | "update">) {
-  const isLocal = s.summary_provider === "local";
-  const isAnthropic = s.summary_provider === "anthropic";
-  // Called unconditionally (rules of hooks) and inert until that provider is
-  // the chosen one — neither the Keychain slot nor the model listing is
-  // touched otherwise.
-  const isOpenAi = s.summary_provider === "openai";
-  const openaiKey = useProviderKey("openai", { enabled: isOpenAi });
-  const openaiModels = useCloudModels("openai", openaiKey.hasKey, s.summary_model, {
-    enabled: isOpenAi,
-  });
-  const anthropicKey = useProviderKey("anthropic", { enabled: isAnthropic });
-  const anthropicModels = useCloudModels("anthropic", anthropicKey.hasKey, s.anthropic_model, {
-    enabled: isAnthropic,
-  });
-
   return (
     <>
       <Section title="Summaries">
+        <OllamaConnect
+          baseUrl={s.local_llm_base_url}
+          onBaseUrlChange={(v) => update("local_llm_base_url", v)}
+          model={s.local_llm_model}
+          onModelChange={(v) => update("local_llm_model", v)}
+        />
+        <div className="py-3 space-y-2">
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Works with Ollama, LM Studio (<code>http://localhost:1234/v1</code>),
+            <code> llama-server</code>, and vLLM. Don't have one yet?{" "}
+            <button
+              type="button"
+              onClick={() => openExternal("https://ollama.com/download")}
+              className="underline hover:text-[var(--color-text)]"
+            >
+              Install Ollama
+            </button>
+            , then pull the recommended model:
+          </p>
+          <CommandSnippet
+            command={`ollama pull ${RECOMMENDED_OLLAMA_MODEL}`}
+            ariaLabel="Copy Ollama pull command"
+          />
+          <p className="text-xs text-[var(--color-text-muted)]">
+            On a 16 GB Mac use <code>ollama pull {RECOMMENDED_OLLAMA_MODEL_16GB}</code> instead —{" "}
+            {RECOMMENDED_OLLAMA_MODEL} needs ~24 GB+; 9B and up will OOM during summary.
+          </p>
+        </div>
         <Row
-          label="Provider"
-          description="Local keeps the transcript on your Mac — pick this for confidential meetings. The cloud providers (OpenAI, Anthropic) are faster and produce better summaries, but send the transcript to them."
+          label="Thinking mode"
+          description="Qwen 3+ reasons internally before answering — sometimes higher quality, but can take many minutes on a long meeting. Ollama only; other servers ignore it."
           control={
-            <Select
-              value={s.summary_provider}
-              onChange={(v) => update("summary_provider", v)}
-              options={SUMMARY_PROVIDERS}
+            <Toggle
+              label="Enable thinking mode"
+              checked={s.local_llm_think === "true"}
+              onChange={(on) =>
+                update("local_llm_think", on ? "true" : "false")
+              }
             />
           }
         />
-
-        {isOpenAi && (
-          <>
-            <Row
-              label="Model"
-              description="Reasoning models (gpt-5 and later, o-series) are handled automatically."
-              control={
-                <Select
-                  value={s.summary_model}
-                  onChange={(v) => update("summary_model", v)}
-                  options={openaiModels}
-                />
-              }
-            />
-            <ProviderKeyCard provider="openai" />
-          </>
-        )}
-
-        {isAnthropic && (
-          <>
-            <Row
-              label="Model"
-              description="Claude models. Each model's own adaptive thinking decides how much it reasons."
-              control={
-                <Select
-                  value={s.anthropic_model}
-                  onChange={(v) => update("anthropic_model", v)}
-                  options={anthropicModels}
-                />
-              }
-            />
-            <ProviderKeyCard provider="anthropic" />
-          </>
-        )}
-
-        {isLocal && (
-          <>
-            <OllamaConnect
-              baseUrl={s.local_llm_base_url}
-              onBaseUrlChange={(v) => update("local_llm_base_url", v)}
-              model={s.local_llm_model}
-              onModelChange={(v) => update("local_llm_model", v)}
-            />
-            <div className="py-3 space-y-2">
-              <p className="text-xs text-[var(--color-text-muted)]">
-                Works with Ollama, LM Studio (<code>http://localhost:1234/v1</code>),
-                <code> llama-server</code>, and vLLM. Don't have one yet?{" "}
-                <button
-                  type="button"
-                  onClick={() => openExternal("https://ollama.com/download")}
-                  className="underline hover:text-[var(--color-text)]"
-                >
-                  Install Ollama
-                </button>
-                , then pull the recommended model:
-              </p>
-              <CommandSnippet
-                command={`ollama pull ${RECOMMENDED_OLLAMA_MODEL}`}
-                ariaLabel="Copy Ollama pull command"
-              />
-              <p className="text-xs text-[var(--color-text-muted)]">
-                On a 16 GB Mac use <code>ollama pull {RECOMMENDED_OLLAMA_MODEL_16GB}</code> instead —{" "}
-                {RECOMMENDED_OLLAMA_MODEL} needs ~24 GB+; 9B and up will OOM during summary.
-              </p>
-            </div>
-            <Row
-              label="Thinking mode"
-              description="Qwen 3+ reasons internally before answering — sometimes higher quality, but can take many minutes on a long meeting. Ollama only; other servers ignore it."
-              control={
-                <Toggle
-                  label="Enable thinking mode"
-                  checked={s.local_llm_think === "true"}
-                  onChange={(on) =>
-                    update("local_llm_think", on ? "true" : "false")
-                  }
-                />
-              }
-            />
-          </>
-        )}
 
         <Row
           label="Default preset"
