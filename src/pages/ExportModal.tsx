@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { X } from "lucide-react";
-import { ipc, type ExportFormat, type Note } from "../lib/ipc";
+import { ipc, type ExportFormat, type RecordingAudio, type Note } from "../lib/ipc";
 import { useRecordingStore } from "../lib/store";
 import { useCloudStore } from "../lib/cloud";
 import { Modal } from "./settings/components/Modal";
@@ -157,6 +157,36 @@ export function ExportModal({
   const [includeSpeakerLabels, setIncludeSpeakerLabels] = useState(true);
   const [busy, setBusy] = useState(false);
 
+  const [recordings, setRecordings] = useState<RecordingAudio[]>([]);
+  const [recordingsError, setRecordingsError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setRecordings([]);
+    setRecordingsError(null);
+    ipc.noteRecordingAudio(note.id).then((files) => {
+      if (!cancelled) setRecordings(files);
+    }).catch((e) => {
+      if (!cancelled) setRecordingsError(String(e));
+    });
+    return () => { cancelled = true; };
+  }, [note.id, open]);
+
+  async function exportRecording(recording: RecordingAudio) {
+    setBusy(true);
+    try {
+      const path = await save({
+        defaultPath: `${slug(note.title)}-recording-${recording.sessionIndex}-${recording.source}.wav`,
+        filters: [{ name: "WAV audio", extensions: ["wav"] }],
+      });
+      if (path) await ipc.exportRecordingAudio(note.id, recording.sessionId, recording.source, path);
+    } catch (e) {
+      pushError({ noteId: note.id, message: String(e), kind: "export" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const nothingSelected =
     !(includeSummary && hasSummary) &&
     !(includeTranscript && hasTranscript) &&
@@ -238,6 +268,23 @@ export function ExportModal({
             }))}
           />
         </div>
+
+        {(recordings.length > 0 || recordingsError) && (
+          <div className="flex flex-col gap-2 pt-4 border-t border-[var(--color-line)]">
+            <div className="nd-label">Raw recordings</div>
+            {recordingsError && <p role="alert" className="text-sm">Could not load recordings: {recordingsError}</p>}
+            {recordings.map((recording) => {
+              const source = recording.source === "mic" ? "microphone" : "system";
+              return (
+                <div key={`${recording.sessionId}-${recording.source}`} className="flex items-center justify-between gap-4">
+                  <span className="text-sm">Recording {recording.sessionIndex} · {recording.source === "mic" ? "Microphone" : "System audio"}</span>
+                  <Btn disabled={busy} aria-label={`Export recording ${recording.sessionIndex} ${source} WAV`}
+                    onClick={() => void exportRecording(recording)}>Export WAV…</Btn>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         <div className="flex justify-end gap-2 pt-1">
           <Btn onClick={onClose}>Cancel</Btn>

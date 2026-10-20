@@ -94,7 +94,7 @@ describe("settings dialog", () => {
     expect(screen.getByTestId("location")).toHaveTextContent(/^\/trash$/);
   });
 
-  it("persists the keep-audio toggle in the Recording section", async () => {
+  it("keeps audio by default and persists an explicit opt-out", async () => {
     const saved: Record<string, string> = {};
     renderApp("/settings?tab=recording", {
       settings_set: (args) => {
@@ -108,12 +108,12 @@ describe("settings dialog", () => {
     const toggle = await within(dialog).findByRole("switch", {
       name: /keep recorded audio/i,
     });
-    expect(toggle).not.toBeChecked();
+    expect(toggle).toBeChecked();
 
     await userEvent.click(toggle);
 
-    expect(toggle).toBeChecked();
-    expect(saved.keep_audio).toBe("true");
+    expect(toggle).not.toBeChecked();
+    expect(saved.keep_audio).toBe("false");
   });
 
   // #180: defaults on for a fresh install and for a library with no
@@ -144,6 +144,10 @@ describe("settings dialog", () => {
   // the two regimes is in force rather than describing the feature generically.
   it("states that nothing is stored while keep-audio is off", async () => {
     renderApp("/settings?tab=recording", {
+      settings_get: (args) => {
+        const key = (args as { key: string }).key;
+        return key === "keep_audio" ? "false" : key === "onboarding_completed" ? "true" : null;
+      },
       settings_set: () => null,
     });
     const dialog = await screen.findByRole("dialog", { name: /settings/i });
@@ -169,6 +173,10 @@ describe("settings dialog", () => {
   it("reveals Transcribe manually only once keep-audio is on", async () => {
     const saved: Record<string, string> = {};
     renderApp("/settings?tab=recording", {
+      settings_get: (args) => {
+        const key = (args as { key: string }).key;
+        return key === "keep_audio" ? "false" : key === "onboarding_completed" ? "true" : null;
+      },
       settings_set: (args) => {
         const { key, value } = args as { key: string; value: string };
         saved[key] = value;

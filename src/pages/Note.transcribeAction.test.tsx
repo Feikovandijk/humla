@@ -1,3 +1,4 @@
+import { mockConvertFileSrc } from "@tauri-apps/api/mocks";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import { act } from "react";
@@ -421,5 +422,19 @@ describe("the transcript panel with both text and a pending take", () => {
     expect(
       within(actionRow()).queryByRole("button", { name: /^transcribe$/i }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("saved recording playback without a transcript", () => {
+  it.each(["", "Earlier text without timing"])("plays saved takes with transcript %j", async (transcript) => {
+    mockConvertFileSrc("macos");
+    await openTranscriptPanel(
+      [session({ canTranscribe: true }), session({ id: "s2", index: 2 })],
+      { note_session_playback_path: (args) => `/tmp/${(args as { sessionId: string }).sessionId}.wav` },
+      { transcript },
+    );
+    await waitFor(() => expect(document.querySelector("audio")?.getAttribute("src")).toContain("s1.wav"));
+    await userEvent.click(screen.getByRole("button", { name: "Recording session 2" }));
+    await waitFor(() => expect(document.querySelector("audio")?.getAttribute("src")).toContain("s2.wav"));
   });
 });

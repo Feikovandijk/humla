@@ -376,7 +376,7 @@ export function Note() {
   // through the settings bus, not a plain fetch: Settings is a dialog over a
   // *pinned* router location, so this view never sees the trip to /settings and
   // back and can't use navigation as its cue to re-read.
-  const keepAudio = useLiveSetting("keep_audio") === "true";
+  const keepAudio = (useLiveSetting("keep_audio") ?? "true") === "true";
   // Live reasoning + content streamed from the local LLM. Cleared each time a
   // new summarize starts and again when the summary lands. Scoped by note id
   // so a delta from a different note's run doesn't leak into this view.
@@ -1648,6 +1648,16 @@ export function Note() {
                 </div>
 
                 {(isRecording || isPaused) && <ListeningHeader noteId={draft.id} />}
+
+                {!recActive && (!hasTranscript || timeline.length === 0 || !timelineCoversTranscript) &&
+                  (!!playbackUrl || sessions.some((s) => s.hasPlayback)) && (
+                    <TranscriptPlayer
+                      noteId={draft.id} timeline={[]} setTimeline={setTimeline}
+                      sessions={sessions} fallbackPlaybackUrl={playbackUrl}
+                      audioAvailable keepAudio={keepAudio} disabled={readOnly}
+                      bottomAligned={false}
+                    />
+                  )}
 
                 {hasTranscript ? (
                   <>

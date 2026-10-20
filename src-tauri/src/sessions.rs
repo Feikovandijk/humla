@@ -10,7 +10,7 @@
 //!   <session_uuid>/
 //!     playback.wav                      # mixed mono 16k WAV for the player
 //!     timeline.jsonl                    # per-chunk timeline (offset labels)
-//!     mic.wav / sys.wav                 # retained source streams (opt-in / auto)
+//!     mic.wav / sys.wav                 # retained source streams (unless opted out)
 //!     chunks.json                       # chunk timings for re-diarize
 //! ```
 //!
@@ -624,9 +624,9 @@ pub fn remote_stamp_path(session_dir: &Path, field: AssetField) -> PathBuf {
 // Honest keep_audio (#24) — the storage decision and the cleanup primitives.
 // ---------------------------------------------------------------------------
 
-/// The shipped default for `keep_audio`: off. The single source of truth for
+/// The shipped default for `keep_audio`: on. The single source of truth for
 /// the default; mirrored by the frontend's `settings/types.ts` default.
-const KEEP_AUDIO_DEFAULT: bool = false;
+const KEEP_AUDIO_DEFAULT: bool = true;
 
 /// Whether this device should persist audio at all, from the raw `keep_audio`
 /// setting value. The single gate for every audio write and fetch (#24).
@@ -1561,8 +1561,8 @@ mod tests {
     fn retain_audio_follows_the_setting() {
         assert!(retain_audio(Some("true")));
         assert!(!retain_audio(Some("false")));
-        // Unset falls back to the shipped default (off).
-        assert!(!retain_audio(None));
+        // New recordings survive unless the user opted out.
+        assert!(retain_audio(None));
         // Anything that isn't the literal "true" is off — the setting is stored
         // as a string and a garbled value must fail closed, not open.
         assert!(!retain_audio(Some("")));
