@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { act, fireEvent, screen, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { latestReleases } from "../../content/releases";
 import { writeSetting } from "../../lib/settingsBus";
 import { renderApp, openSettingsFromSidebar } from "../../test/app";
+import type { TranscribeConfig } from "../../lib/ipc";
 
 describe("settings dialog", () => {
   it("dismisses release notes before opening Settings with the keyboard shortcut", async () => {
@@ -409,27 +410,15 @@ describe("settings dialog", () => {
   });
 
   it("resolves legacy deep links to their new sections", async () => {
-    // `keys` tab is dissolved: it anchors to Transcription. The active
-    // provider's key is inline; the other providers' keys live under the
-    // section's Advanced disclosure alongside overrides.
+    // `keys` tab is dissolved: it anchors to Transcription, which holds no
+    // API keys any more — everything runs locally.
     renderApp("/settings?tab=keys");
     const dialog = await screen.findByRole("dialog", { name: /settings/i });
     expect(
       within(dialog).getByRole("tab", { name: "Transcription" }),
     ).toHaveAttribute("aria-selected", "true");
-    expect(
-      await within(dialog).findByLabelText(/openai api key/i),
-    ).toBeInTheDocument();
-
-    await userEvent.click(
-      (await within(dialog).findAllByRole("button", { name: /advanced/i }))[0],
-    );
-    expect(
-      await within(dialog).findByLabelText(/deepgram api key/i),
-    ).toBeInTheDocument();
-    expect(
-      within(dialog).getByLabelText(/groq api key/i),
-    ).toBeInTheDocument();
+    await within(dialog).findByRole("radiogroup", { name: "Local models" });
+    expect(within(dialog).queryByLabelText(/api key/i)).not.toBeInTheDocument();
   });
 
   it("the default language lives in Transcription and persists", async () => {
@@ -461,17 +450,13 @@ describe("settings dialog", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("per-language overrides and local models sit behind Advanced", async () => {
+  it("per-language overrides sit behind Advanced", async () => {
     renderApp("/settings?tab=transcription");
     const dialog = await screen.findByRole("dialog", { name: /settings/i });
-    await within(dialog).findByText("Provider");
+    await within(dialog).findByRole("radiogroup", { name: "Local models" });
 
-    // Collapsed: expert routing is out of sight.
     expect(
       within(dialog).queryByText("Per-language overrides"),
-    ).not.toBeInTheDocument();
-    expect(
-      within(dialog).queryByText(/pick a multilingual model/i),
     ).not.toBeInTheDocument();
 
     await userEvent.click(
@@ -481,26 +466,52 @@ describe("settings dialog", () => {
     expect(
       await within(dialog).findByText("Per-language overrides"),
     ).toBeInTheDocument();
-    expect(
-      within(dialog).getByText(/pick a multilingual model/i),
-    ).toBeInTheDocument();
   });
 
-  it("default provider renders as self-describing rows", async () => {
-    renderApp("/settings?tab=transcription");
+  it("transcription is a local model list; a stored cloud default moves to local", async () => {
+    const writes: { config: TranscribeConfig }[] = [];
+    const model = (id: string, downloaded: boolean) => ({
+      id,
+      label: id,
+      description: "",
+      filename: "x.bin",
+      sizeBytesHint: 1,
+      kind: "multilingual",
+      specificLanguage: null,
+      downloaded,
+      sizeBytes: null,
+      path: null,
+    });
+    renderApp("/settings?tab=transcription", {
+      get_transcribe_config: () => ({
+        default: { provider: "openai", model: "whisper-1" },
+        per_language: { en: { provider: "deepgram", model: "nova-3" } },
+      }),
+      local_whisper_models: () => [
+        model("large-v3-turbo-q5", true),
+        model("medium-q5", true),
+        model("large-v3-q5", false),
+      ],
+      set_transcribe_config: (args) => {
+        writes.push(args as { config: TranscribeConfig });
+        return null;
+      },
+    });
     const dialog = await screen.findByRole("dialog", { name: /settings/i });
 
-    // Every control is a labeled row with an explanation — no bare selects
-    // (maintainer design-review amendment on #15).
-    expect(await within(dialog).findByText("Provider")).toBeInTheDocument();
-    expect(
-      within(dialog).getByText(/where audio is transcribed/i),
-    ).toBeInTheDocument();
-    expect(within(dialog).getByText("Model")).toBeInTheDocument();
-    // The selected provider shows in the picker trigger.
-    expect(
-      within(dialog).getByRole("combobox", { name: /openai/i }),
-    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(writes[0]?.config).toEqual({
+        default: { provider: "local", model_id: "large-v3-turbo-q5", preset: "quality", use_gpu: true },
+        per_language: {},
+      }),
+    );
+    expect(within(dialog).queryByLabelText(/api key/i)).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("tab", { name: "Cloud" })).not.toBeInTheDocument();
+
+    // Not downloaded → can't be the default yet.
+    expect(within(dialog).getByRole("radio", { name: /large-v3-q5/ })).toBeDisabled();
+    await userEvent.click(within(dialog).getByRole("radio", { name: /medium-q5/ }));
+    expect(writes.at(-1)?.config.default).toMatchObject({ provider: "local", model_id: "medium-q5" });
   });
 
   it("local provider exposes labeled Quality and Metal rows", async () => {
@@ -659,22 +670,16 @@ describe("settings dialog", () => {
     });
   });
 
-  it("summaries: labeled provider rows with the OpenAI key inline, preset relocated", async () => {
+  it("summaries: local only, no API keys, preset relocated", async () => {
     renderApp("/settings?tab=summaries");
     const dialog = await screen.findByRole("dialog", { name: /settings/i });
 
-    expect(await within(dialog).findByText("Provider")).toBeInTheDocument();
-    expect(
-      within(dialog).getByText(/local keeps the transcript on your mac/i),
-    ).toBeInTheDocument();
-    // Key inline under the cloud provider — no separate keys surface.
-    expect(
-      await within(dialog).findByLabelText(/openai api key/i),
-    ).toBeInTheDocument();
     // Default preset moved here from General.
     expect(
-      within(dialog).getByRole("combobox", { name: /meeting/i }),
+      await within(dialog).findByRole("combobox", { name: /meeting/i }),
     ).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(/api key/i)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("Provider")).not.toBeInTheDocument();
 
     await userEvent.click(within(dialog).getByRole("tab", { name: "General" }));
     expect(

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router-dom";
 import { Chat, FolderChat } from "./Chat";
@@ -7,6 +7,14 @@ import { useCloudStore, DISCONNECTED, type CloudRole } from "../lib/cloud";
 import { useNotesStore } from "../lib/store";
 import { useGlobalChatStore } from "../lib/globalChat";
 import type { Note } from "../lib/ipc";
+
+// These tests exercise the panel on a cloud provider, the app default before
+// chat went local-only; keep it as the default from the first render so the
+// key read starts at mount, as it did then.
+vi.mock("./settings/types", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("./settings/types")>();
+  return { ...mod, DEFAULTS: { ...mod.DEFAULTS, chat_provider: "openai" } };
+});
 
 // The `/chat` page (issue #95). The page owns the shell, the library-wide target
 // and the collapsed-sidebar fallback; the conversation list it publishes is

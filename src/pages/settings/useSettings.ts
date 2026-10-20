@@ -24,6 +24,25 @@ import {
 // the tabs need. Pulled out of the page component so individual tabs
 // can grab only the slices they care about, and so the page renders
 // stay focused on layout.
+// Settings offers on-device transcription only: a cloud default becomes the
+// recommended local model and cloud per-language overrides are dropped.
+// Returns `cfg` itself when it is already local-only.
+export function pinTranscribeLocal(cfg: TranscribeConfig): TranscribeConfig {
+  const perLanguage = Object.fromEntries(
+    Object.entries(cfg.per_language).filter(([, c]) => c.provider === "local"),
+  );
+  const cloudOverrides =
+    Object.keys(perLanguage).length !== Object.keys(cfg.per_language).length;
+  if (cfg.default.provider === "local" && !cloudOverrides) return cfg;
+  return {
+    default:
+      cfg.default.provider === "local"
+        ? cfg.default
+        : { provider: "local", model_id: "large-v3-turbo-q5", preset: "quality", use_gpu: true },
+    per_language: perLanguage,
+  };
+}
+
 export function useSettings() {
   const [local, setLocal] = useState<LocalState>(EMPTY_LOCAL_STATE);
   // One per engine, so each can be downloaded or deleted on its own whichever
@@ -47,7 +66,7 @@ export function useSettings() {
   }, [updateDiarize]);
   const [s, setS] = useState<Record<EditableKey, string>>(DEFAULTS);
   const [transcribeConfig, setTranscribeConfig] = useState<TranscribeConfig>({
-    default: { provider: "openai", model: "whisper-1" },
+    default: { provider: "local", model_id: "large-v3-turbo-q5", preset: "quality", use_gpu: true },
     per_language: {},
   });
 
@@ -61,14 +80,31 @@ export function useSettings() {
       ]);
       if (cancelled) return;
       setLocal((p) => ({ ...p, models }));
-      if (cfg) setTranscribeConfig(cfg);
+      if (cfg) {
+        const local = pinTranscribeLocal(cfg);
+        setTranscribeConfig(local);
+        if (local !== cfg) void ipc.setTranscribeConfig(local).catch(() => {});
+      }
       const entries = await Promise.all(
         (Object.keys(DEFAULTS) as EditableKey[]).map(
           async (key) => [key, (await ipc.getSetting(key)) ?? DEFAULTS[key]] as const,
         ),
       );
       if (cancelled) return;
-      setS(Object.fromEntries(entries) as Record<EditableKey, string>);
+      const loaded = Object.fromEntries(entries) as Record<EditableKey, string>;
+      // Settings offers local providers only, so a cloud choice stored before
+      // that would be invisible and unchangeable: move it to local.
+      if (loaded.summary_provider !== "local") {
+        loaded.summary_provider = "local";
+        void writeSetting("summary_provider", "local");
+      }
+      if (loaded.chat_provider !== "ollama") {
+        loaded.chat_provider = "ollama";
+        loaded.chat_model = "";
+        void writeSetting("chat_provider", "ollama");
+        void writeSetting("chat_model", "");
+      }
+      setS(loaded);
     })();
     return () => {
       cancelled = true;

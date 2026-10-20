@@ -48,11 +48,11 @@ export const DEFAULTS: Record<EditableKey, string> = {
   custom_vocabulary: "",
   summary_model: "gpt-5.4-mini",
   anthropic_model: "claude-sonnet-5",
-  summary_provider: "openai",
+  summary_provider: "local",
   local_llm_base_url: "http://localhost:11434/v1",
   local_llm_model: "",
   local_llm_think: "false",
-  chat_provider: "openai",
+  chat_provider: "ollama",
   chat_model: "",
   // Empty = follow the chat server, embeddinggemma (#179).
   embed_base_url: "",
