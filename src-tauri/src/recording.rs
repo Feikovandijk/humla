@@ -9,6 +9,12 @@ use tokio::task::JoinHandle;
 
 pub type Inflight = Arc<Mutex<Vec<JoinHandle<()>>>>;
 
+#[derive(Clone)]
+pub struct CaptureLanguage {
+    pub language: String,
+    pub deferred: bool,
+}
+
 /// Bounded ring of recent transcript words. Used as Whisper's `initial_prompt`
 /// so each chunk decodes with knowledge of what was just said — sentence
 /// continuity, proper-noun spelling, and a real prior context that suppresses
@@ -197,6 +203,8 @@ pub enum SinkMode {
 /// user from starting a new recording while an hour of audio transcribes.
 #[derive(Clone)]
 pub struct CaptureSink {
+    // Live chunks wait here until the user chooses a language for this take.
+    pub language_choice: Option<tokio::sync::watch::Receiver<Option<CaptureLanguage>>>,
     // Per-source rolling context windows of the last ~150 committed words.
     // Fed to Whisper's `initial_prompt` for every chunk so decoding stays
     // anchored to its own stream rather than mixing the user's side with
@@ -559,6 +567,7 @@ impl Default for CaptureSink {
 impl CaptureSink {
     pub fn new(mode: SinkMode) -> Self {
         Self {
+            language_choice: None,
             mic_trail: Arc::new(Mutex::new(TranscriptTrail::default())),
             sys_trail: Arc::new(Mutex::new(TranscriptTrail::default())),
             chunk_log: Arc::new(Mutex::new(Vec::new())),
@@ -568,6 +577,20 @@ impl CaptureSink {
             capture_timing: Arc::new(Mutex::new(None)),
             replay_progress: None,
             mode,
+        }
+    }
+
+    pub fn language_pending(&self) -> bool {
+        self.language_choice.as_ref().is_some_and(|choice| choice.borrow().is_none())
+    }
+
+    pub async fn selected_language(&self) -> Result<Option<String>, &'static str> {
+        let Some(mut choice) = self.language_choice.clone() else { return Ok(None) };
+        loop {
+            if let Some(language) = choice.borrow().clone() {
+                return Ok(Some(language.language));
+            }
+            choice.changed().await.map_err(|_| "Recording ended before a language was selected")?;
         }
     }
 
@@ -607,12 +630,17 @@ impl CaptureSink {
 
     /// Whether arriving chunks are transcribed at all.
     pub fn transcribes_on_arrival(&self) -> bool {
+        if let Some(choice) = &self.language_choice {
+            if let Some(language) = choice.borrow().as_ref() {
+                return !language.deferred;
+            }
+        }
         !matches!(self.mode, SinkMode::Deferred)
     }
 
     /// Whether a finished chunk streams into `note.transcript`.
     pub fn streams_to_note(&self) -> bool {
-        matches!(self.mode, SinkMode::Live)
+        matches!(self.mode, SinkMode::Live) && self.transcribes_on_arrival()
     }
 
     /// The same sink re-pointed at another retained stream. Shares the chunk
@@ -645,6 +673,7 @@ impl CaptureSink {
 /// on-disk `recordings/<note_id>/<session_id>/` layout all refer to.
 #[derive(Default)]
 pub struct LiveCapture {
+    pub language_choice: Option<tokio::sync::watch::Sender<Option<CaptureLanguage>>>,
     pub note_id: Option<String>,
     pub child: Option<Child>,
     pub temp_dir: Option<PathBuf>,
@@ -708,6 +737,9 @@ impl LiveCapture {
             return Err(msg);
         }
         let note_id = self.note_id.clone().ok_or("not recording")?;
+        if self.sink.language_pending() {
+            return Err("Choose English or Dutch in Humla before stopping the recording.");
+        }
         self.stop = StopState::Draining;
         Ok(note_id)
     }
@@ -746,6 +778,8 @@ pub fn appends_live(active_note: Option<&str>, stop: StopState, note_id: &str) -
 pub struct RecordingStatus {
     pub note_id: Option<String>,
     pub phase: Phase,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language_session_id: Option<String>,
     // Drain progress, present only during `Stopping` (#182): how many
     // transcribes were in flight when stop was pressed, and how many of those
     // have landed. Additive and skipped when absent, so every listener that
@@ -780,6 +814,7 @@ impl RecordingStatus {
         Self {
             note_id: note_id.map(|s| s.to_string()),
             phase,
+            language_session_id: None,
             pending: None,
             done: None,
             deferred: None,
@@ -1478,6 +1513,54 @@ pub struct DiagnosticPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn chunks_wait_for_the_explicit_capture_language() {
+        let (choice, receiver) = tokio::sync::watch::channel(None);
+        let mut sink = CaptureSink::new(SinkMode::Live);
+        sink.language_choice = Some(receiver);
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(10), sink.selected_language()
+        ).await.is_err());
+        choice.send_replace(Some(CaptureLanguage { language: "nl".into(), deferred: false }));
+        assert_eq!(sink.selected_language().await.unwrap().as_deref(), Some("nl"));
+        drop(choice);
+        assert_eq!(sink.selected_language().await.unwrap().as_deref(), Some("nl"));
+    }
+
+    #[tokio::test]
+    async fn abandoned_capture_releases_waiting_chunks_without_detecting() {
+        let (choice, receiver) = tokio::sync::watch::channel(None);
+        let mut sink = CaptureSink::new(SinkMode::Live);
+        sink.language_choice = Some(receiver);
+        drop(choice);
+        assert!(sink.selected_language().await.is_err());
+        assert_eq!(CaptureSink::new(SinkMode::Live).selected_language().await.unwrap(), None);
+    }
+
+    #[test]
+    fn a_capture_cannot_stop_and_discard_chunks_before_choosing_a_language() {
+        let (_choice, receiver) = tokio::sync::watch::channel(None);
+        let mut sink = CaptureSink::new(SinkMode::Live);
+        sink.language_choice = Some(receiver);
+        let mut capture = LiveCapture::default();
+        capture.note_id = Some("note".into());
+        capture.sink = Arc::new(sink);
+        assert!(capture.begin_stop().is_err());
+        assert_eq!(capture.stop, StopState::None);
+    }
+
+    #[tokio::test]
+    async fn the_chosen_languages_provider_decides_whether_to_defer() {
+        let (choice, receiver) = tokio::sync::watch::channel(None);
+        let mut sink = CaptureSink::new(SinkMode::Live);
+        sink.language_choice = Some(receiver);
+        assert!(sink.transcribes_on_arrival());
+        choice.send_replace(Some(CaptureLanguage { language: "en".into(), deferred: true }));
+        assert_eq!(sink.selected_language().await.unwrap().as_deref(), Some("en"));
+        assert!(!sink.transcribes_on_arrival());
+        assert!(!sink.streams_to_note());
+    }
 
     fn a_chunk() -> ChunkRecord {
         ChunkRecord {

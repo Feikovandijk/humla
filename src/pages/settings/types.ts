@@ -36,7 +36,7 @@ export type EditableKey = Exclude<
 export type { Provider } from "../../lib/providers";
 
 export const DEFAULTS: Record<EditableKey, string> = {
-  language: "no",
+  language: "en",
   default_summary_preset: "meeting",
   diarize_model: DEFAULT_DIARIZE_ENGINE,
   community1_threshold: "0.5",

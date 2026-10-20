@@ -600,6 +600,8 @@ export const ipc = {
     invoke<number>("local_llm_embed_probe", { baseUrl, model }),
 
   recordingStart: (noteId: string) => invoke<void>("recording_start", { noteId }),
+  recordingSelectLanguage: (noteId: string, sessionId: string, language: string) =>
+    invoke<void>("recording_select_language", { noteId, sessionId, language }),
   recordingStop: () => invoke<void>("recording_stop"),
   // Import an existing audio file into a NEW note and run it through the full
   // transcription pipeline. Language + expected speaker count come from the
@@ -909,6 +911,7 @@ export type { SummaryProvider };
 export type RecordingStatus = {
   noteId: string | null;
   phase: RecordingPhase;
+  languageSessionId?: string;
   pending?: number;
   done?: number;
   deferred?: boolean;

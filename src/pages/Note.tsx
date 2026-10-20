@@ -33,8 +33,7 @@ import { ipc, onSummaryThinkingDelta, onSummaryContentDelta, type Note as TNote,
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { SUMMARY_CAPABLE, type SummaryProvider } from "../lib/providers";
 import { useLiveSetting } from "../lib/settingsBus";
-import { useDownloadStore, useNotesStore, useRecordingStore } from "../lib/store";
-import { computeSetupStatus } from "../lib/setupStatus";
+import { useNotesStore, useRecordingStore } from "../lib/store";
 import { useOwnerName, useCloudStore } from "../lib/cloud";
 import { billingCta, planIsLive } from "../lib/billing";
 import { extractSpeakerLabels, renameSpeakerInTranscript } from "../lib/speakers";
@@ -369,7 +368,7 @@ export function Note() {
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
   const [billingOpen, setBillingOpen] = useState(false);
-  const [uiLang, setUiLang] = useState<string>("no");
+  const [uiLang, setUiLang] = useState<string>("en");
   const [globalProvider, setGlobalProvider] = useState<string>("openai");
   // Device-wide audio retention (#24). Off is the shipped default, so an
   // unresolved read means off — don't promise a player that isn't coming. Read
@@ -1954,38 +1953,11 @@ export function NoteToolbar({
   const [teamHintOpen, setTeamHintOpen] = useState(false);
 
   async function record() {
-    // Pre-flight: don't start a doomed recording when the pipeline isn't
-    // functional (same shared predicate as the nag chip + recap). Covers a
-    // missing mic AND a missing/unconfigured STT path. A failed Record click
-    // is an ERROR, not a confirmation: it goes through the persistent error
-    // toast (which carries the Open Settings affordance), never a
-    // 2.5-second flash — that read as "the button did nothing".
-    try {
-      const setup = await computeSetupStatus();
-      if (!setup.pipelineReady) {
-        const downloading = useDownloadStore.getState().active;
-        const message = !setup.micGranted
-          ? "Can't record — microphone permission isn't granted yet. Grant it in Settings."
-          : setup.stt.kind === "local"
-            ? downloading?.modelId === setup.stt.model
-              ? `Can't record yet — the transcription model (${setup.stt.model}) is still downloading. Try again when it finishes.`
-              : `Can't record — the selected transcription model (${setup.stt.model}) isn't downloaded. Download it in Settings → Transcription.`
-            : `Can't record — no API key stored for ${setup.stt.provider}. Add one in Settings → Transcription.`;
-        // Sticky: this blocks the user's next action; auto-dismissing it
-        // read as "the button did nothing". NOTE: mentioning "Settings" in
-        // these messages is what makes the Toaster attach its Open Settings
-        // shortcut — keep that word if you rewrite the copy.
-        useRecordingStore.getState().pushError({ noteId, message, sticky: true });
-        return;
-      }
-    } catch {
-      // If the predicate can't be computed, fall through and attempt the
-      // recording — the backend still surfaces real failures as errors.
-    }
+    // The backend checks both offered languages and microphone permission.
     try {
       await ipc.recordingStart(noteId);
     } catch (e) {
-      useRecordingStore.getState().pushError({ noteId, message: String(e) });
+      useRecordingStore.getState().pushError({ noteId, message: String(e), sticky: true });
     }
   }
   async function onDelete() {

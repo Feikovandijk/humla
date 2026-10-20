@@ -16,7 +16,7 @@ import { Select } from "../../../components/ui/Select";
 // Same default as Settings → General (`DEFAULTS.language`). Kept inline rather
 // than imported from the Settings types module to avoid coupling onboarding to
 // the Settings page's internal shape.
-const DEFAULT_LANGUAGE = "no";
+const DEFAULT_LANGUAGE = "en";
 
 export function LanguageStep({ ctx }: { ctx: StepContext }) {
   const [value, setValue] = useState<string | null>(null);

@@ -432,6 +432,7 @@ where
             commands::diarize_download,
             commands::diarize_delete,
             commands::recording_start,
+            commands::recording_select_language,
             commands::recording_stop,
             commands::import_audio,
             commands::recording_pause,

@@ -143,7 +143,7 @@ export function TranscriptionTab({
         )}
         <Row
           label="Language"
-          description="Default for new notes. Each note has its own language chip in the header that overrides this."
+          description="Default for new notes. Each recording asks you to choose English or Dutch after it starts."
           control={
             <Select
               value={s.language}

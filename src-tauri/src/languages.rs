@@ -1,9 +1,7 @@
-// Backend mirror of src/lib/languages.ts.
+// Historical language names for summaries and provider detection results.
 //
-// We keep two copies — the frontend one drives the picker UI (with native
-// names for display), and this one drives prompt-time language directives
-// for the summary path. Code-to-English-name lookup is all we need server
-// side; the UI layer never sees these strings.
+// The frontend picker offers only English and Dutch. Keep the full lookup
+// here so existing notes in other languages still receive correct summaries.
 //
 // Source: openai/whisper tokenizer.py LANGUAGES dict, plus Cantonese (yue)
 // added in large-v3. 99 entries — no "auto", which is handled separately by
