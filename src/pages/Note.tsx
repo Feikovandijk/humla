@@ -15,6 +15,7 @@ import {
   Circle,
   Cloud,
   Copy,
+  Eraser,
   FileText,
   Folder,
   Languages,
@@ -114,6 +115,14 @@ function formatDateChip(ts: number) {
  * `onFailure` lets the caller that owns the live-stream state drop a partial
  * response; see `clearSummaryStream` in `Note`.
  */
+// A speaker rename follows into the cleaned copy, so the two tabs agree on names.
+async function renameInCleanTranscript(noteId: string, oldLabel: string, newLabel: string) {
+  const text = await ipc.getCleanTranscript(noteId);
+  const next = renameSpeakerInTranscript(text, oldLabel, newLabel);
+  if (next !== text) await ipc.setCleanTranscript(noteId, next);
+  return next;
+}
+
 async function runSummarize(noteId: string, onFailure?: () => void) {
   try {
     await ipc.summarizeNote(noteId);
@@ -383,7 +392,32 @@ export function Note() {
   const [contentStream, setContentStream] = useState<string>("");
   const [thinkingExpanded, setThinkingExpanded] = useState<boolean>(true);
   const [panelOpen, setPanelOpen] = useState<boolean>(true);
-  const [activeTab, setActiveTab] = useState<"summary" | "transcript" | "chat">("summary");
+  const [activeTab, setActiveTab] = useState<"summary" | "transcript" | "clean" | "chat">("summary");
+  // Cleaned reading copy of the transcript. `cleaningId` is the note whose
+  // cleanup is running, so switching notes mid-run doesn't show its spinner here.
+  const [cleanText, setCleanText] = useState("");
+  const [cleaningId, setCleaningId] = useState<string | null>(null);
+  const cleanForId = useRef(id);
+  useEffect(() => {
+    cleanForId.current = id;
+    setCleanText("");
+    if (!id) return;
+    ipc
+      .getCleanTranscript(id)
+      .then((t) => cleanForId.current === id && setCleanText(t))
+      .catch((e) => console.error("getCleanTranscript failed", e));
+  }, [id]);
+  const runClean = async (noteId: string) => {
+    setCleaningId(noteId);
+    try {
+      const t = await ipc.cleanTranscript(noteId);
+      if (cleanForId.current === noteId) setCleanText(t);
+    } catch (e) {
+      useRecordingStore.getState().pushError({ noteId, message: String(e) });
+    } finally {
+      setCleaningId((c) => (c === noteId ? null : c));
+    }
+  };
   // Chat session chrome for the panel header (issue #62). ChatPanel owns all
   // chat state and publishes this projection up; the header's +/history buttons
   // render purely from it. null = no chat chrome (provider not ready / no tab).
@@ -1454,6 +1488,19 @@ export function Note() {
               </button>
               <button
                 type="button"
+                onClick={() => setActiveTab("clean")}
+                className={cn(
+                  "inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[var(--radius)] text-[13px] font-medium transition-colors",
+                  activeTab === "clean"
+                    ? "bg-[var(--color-accent-soft)] text-[var(--color-accent-text)]"
+                    : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]",
+                )}
+              >
+                <Eraser size={14} strokeWidth={1.6} />
+                Clean
+              </button>
+              <button
+                type="button"
                 onClick={() => setActiveTab("chat")}
                 className={cn(
                   "inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-[var(--radius)] text-[13px] font-medium transition-colors",
@@ -1558,6 +1605,63 @@ export function Note() {
               </div>
             ) : activeTab === "chat" ? (
               chatTarget && <ChatPanel target={chatTarget} onControls={handleChatControls} />
+            ) : activeTab === "clean" ? (
+              <div className="flex-1 min-h-0 flex flex-col px-4 py-4">
+                {cleanText && (
+                  <div className="flex items-center justify-end gap-0.5 mb-4 shrink-0">
+                    <CopyButton label="Clean transcript" getText={() => cleanText} />
+                    {!readOnly && (
+                      <button
+                        type="button"
+                        onClick={() => void runClean(draft.id)}
+                        disabled={cleaningId === draft.id || recActive || !hasTranscript}
+                        title="Clean up the transcript again, replacing this copy"
+                        aria-label="Regenerate clean transcript"
+                        className="nd-btn-icon nd-btn-icon-sm"
+                      >
+                        <RefreshCw
+                          size={15}
+                          strokeWidth={1.6}
+                          className={cleaningId === draft.id ? "animate-spin" : undefined}
+                        />
+                      </button>
+                    )}
+                  </div>
+                )}
+                {cleaningId === draft.id ? (
+                  <SkeletonLines lines={5} />
+                ) : cleanText ? (
+                  <TranscriptView
+                    transcript={cleanText}
+                    onClick={() => {}}
+                    disabled
+                    disabledReason=""
+                    fill
+                    bottomAligned={false}
+                  />
+                ) : (
+                  <PanelEmpty
+                    icon={<Eraser size={22} strokeWidth={1.5} />}
+                    text={
+                      hasTranscript
+                        ? "A cleaned-up copy of the transcript, without filler words and false starts. The original stays as it is."
+                        : "No transcript to clean up yet."
+                    }
+                    action={
+                      hasTranscript && !readOnly ? (
+                        <button
+                          type="button"
+                          onClick={() => void runClean(draft.id)}
+                          disabled={recActive}
+                          className="nd-btn"
+                        >
+                          Clean up transcript
+                        </button>
+                      ) : undefined
+                    }
+                  />
+                )}
+              </div>
             ) : (
               <div className="flex-1 min-h-0 flex flex-col px-4 py-4">
                 <div className="flex flex-wrap items-center gap-2 mb-4 shrink-0">
@@ -1669,6 +1773,9 @@ export function Note() {
                             newLabel,
                             onRewritten: (noteId, transcript) => {
                               replaceTranscript(noteId, transcript);
+                              void renameInCleanTranscript(noteId, oldLabel, newLabel)
+                                .then((t) => noteId === cleanForId.current && setCleanText(t))
+                                .catch((e) => console.error("clean rename failed", e));
                               // The open note's own draft, so the pills and the
                               // transcript view flip with everything else.
                               if (noteId === draft.id) {
@@ -1689,6 +1796,10 @@ export function Note() {
                         onRename={(oldLabel, newLabel) => {
                           if (readOnlyRef.current) return;
                           patch("transcript", renameSpeakerInTranscript(draft.transcript, oldLabel, newLabel));
+                          setCleanText((t) => renameSpeakerInTranscript(t, oldLabel, newLabel));
+                          void renameInCleanTranscript(draft.id, oldLabel, newLabel).catch((e) =>
+                            console.error("clean rename failed", e),
+                          );
                           setTimeline((tl) =>
                             tl.map((e) => (e.label === oldLabel ? { ...e, label: newLabel } : e)),
                           );
