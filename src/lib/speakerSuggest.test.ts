@@ -143,36 +143,6 @@ describe("suggestSpeakerLabels ranking", () => {
 });
 
 describe("suggestSpeakerLabels sources", () => {
-  it("suggests a workspace member you have never labelled", () => {
-    // Most speakers are not members, but a member who joined a call should be
-    // suggested before you have ever typed their name.
-    const out = suggestSpeakerLabels({
-      query: "hege",
-      stats: [],
-      roster: ["Hege Tronshaugen"],
-    });
-    expect(out).toEqual([{ label: "Hege Tronshaugen", kind: "member", inNote: false }]);
-  });
-
-  it("marks a member you HAVE labelled as a used label, not a stranger", () => {
-    const out = suggestSpeakerLabels({
-      query: "hege",
-      stats: [stat("Hege Tronshaugen", 3)],
-      roster: ["Hege Tronshaugen"],
-    });
-    expect(out).toHaveLength(1);
-    expect(out[0].kind).toBe("used");
-  });
-
-  it("ranks labels you have used above members you have not", () => {
-    const out = suggestSpeakerLabels({
-      query: "",
-      stats: [stat("Hege", 1)],
-      roster: ["Anna"],
-    });
-    expect(out.map((s) => s.label)).toEqual(["Hege", "Anna"]);
-  });
-
   it("flags a label already on this note, because picking it merges", () => {
     const out = suggestSpeakerLabels({
       query: "",
@@ -198,23 +168,23 @@ describe("suggestSpeakerLabels sources", () => {
 describe("caseVariantTarget", () => {
   it("preselects an existing label the typed text differs from only in case", () => {
     // "åse" next to "Åse" is never a deliberate second person.
-    expect(caseVariantTarget("åse", [{ label: "Åse", kind: "used", inNote: false }])).toBe("Åse");
+    expect(caseVariantTarget("åse", [{ label: "Åse", inNote: false }])).toBe("Åse");
   });
 
   it("preselects nothing when the typed text is an exact match", () => {
     // Enter already commits exactly that; there is nothing to correct.
-    expect(caseVariantTarget("Åse", [{ label: "Åse", kind: "used", inNote: false }])).toBeNull();
+    expect(caseVariantTarget("Åse", [{ label: "Åse", inNote: false }])).toBeNull();
   });
 
   it("preselects nothing for a mere prefix", () => {
     // Hege + Enter must not silently write Hege Tronshaugen — a new person is
     // never harder to enter than an existing one.
     expect(
-      caseVariantTarget("Hege", [{ label: "Hege Tronshaugen", kind: "used", inNote: false }]),
+      caseVariantTarget("Hege", [{ label: "Hege Tronshaugen", inNote: false }]),
     ).toBeNull();
   });
 
   it("preselects nothing for an unrelated name", () => {
-    expect(caseVariantTarget("Anna", [{ label: "Hege", kind: "used", inNote: false }])).toBeNull();
+    expect(caseVariantTarget("Anna", [{ label: "Hege", inNote: false }])).toBeNull();
   });
 });

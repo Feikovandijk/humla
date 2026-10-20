@@ -18,7 +18,6 @@ import {
   MonitorSpeaker,
   HardDriveDownload,
   Sparkles,
-  Cloud,
   Languages,
   Check,
   ChevronRight,
@@ -210,14 +209,6 @@ export function DoneStep({ ctx }: { ctx: StepContext }) {
           onClick={() => ctx.goTo("summary")}
         />
 
-        {/* Humla Cloud — informational; "Local only" is the happy default. */}
-        <ChecklistRow
-          icon={<Cloud size={16} strokeWidth={1.8} />}
-          label="Humla Cloud"
-          value={s == null ? "Checking…" : (s.cloudWorkspace ?? "Local only")}
-          tone={s == null ? "muted" : s.cloudWorkspace ? "ok" : "muted"}
-          onClick={() => ctx.goTo("cloud")}
-        />
 
         {/* Language — meeting language display name. */}
         <ChecklistRow

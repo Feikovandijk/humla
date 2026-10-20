@@ -23,16 +23,7 @@ mod api_keys;
 mod assets;
 mod chat;
 mod clients;
-// `pub(crate)` so `crate::menubar` can resolve the active workspace when it
-// creates a note for a headless recording.
-pub(crate) mod cloud;
-pub(crate) mod cloud_auth;
 mod export;
-// Live cloud-sync worker glue. Behind the `cloud` feature; `pub` so `run()` can
-// reach `cloud_worker::install`. Not a #[tauri::command] group, so no glob
-// re-export below.
-#[cfg(feature = "cloud")]
-pub mod cloud_worker;
 mod clean;
 mod folders;
 mod local_llm;
@@ -52,8 +43,6 @@ pub use assets::*;
 pub use chat::*;
 pub use clean::*;
 pub use clients::*;
-pub use cloud::*;
-pub use cloud_auth::*;
 pub use export::*;
 pub use folders::*;
 pub use local_llm::*;
@@ -789,10 +778,6 @@ async fn rediarize_apply_to_chunks(
         progress.finished(&app);
         return Err(anyhow::anyhow!(e));
     }
-    // Re-diarize rewrote this session's timeline.jsonl — re-push the metadata
-    // (idempotent) so the record exists; the frontend re-uploads the timeline
-    // asset after the command returns.
-    session_changed_for_sync(&app, &note_id, &session_id);
 
     progress.finished(&app);
     Ok(TakeStepCosts { echo_ms, playback_ms })
@@ -1062,7 +1047,6 @@ pub async fn note_timeline_repair(
     .map_err(err)?
     .map_err(|e| format!("repair timeline: {e}"))?;
 
-    session_changed_for_sync(&app, &note_id, &session_id);
     // Re-project rather than assume: the reader's fallback is driven by this
     // answer, and claiming a coverage the files don't actually have is how the
     // text would stay hidden. Cheap — only a repair that happened pays for it.
@@ -1426,7 +1410,6 @@ fn commit_rebuilt_transcript(app: &AppHandle, note_id: &str, transcript: String)
         }
         db::set_transcript(&conn, note_id, &transcript).map_err(err)?;
     }
-    note_changed_for_sync(app, note_id); // timeline edit rewrote the transcript
     let _ = app.emit(
         "transcript_replaced",
         TranscriptPayload {
@@ -2620,23 +2603,6 @@ pub async fn recording_start(
         }
     }
 
-    // Shared-note recording lock. For a workspace note, claim it before we
-    // start capturing so two teammates can't record the same note at once —
-    // their transcripts would otherwise clobber each other under last-write-wins
-    // sync. Server-arbitrated via a unique index; Personal notes and an
-    // unreachable cloud return `Skipped` and record unlocked.
-    let claimed_lock_id = match cloud::claim_recording_lock(&app, &note_id).await {
-        cloud::LockClaim::Held(who) => {
-            let msg = format!(
-                "{who} is recording this note — only one person can record a shared note at a time."
-            );
-            emit_error(&app, Some(&note_id), &msg);
-            return Err(msg);
-        }
-        cloud::LockClaim::Granted(id) => Some(id),
-        cloud::LockClaim::Skipped => None,
-    };
-
     emit_status(&app, Some(&note_id), Phase::Starting);
 
     let temp_dir = std::env::temp_dir().join(format!("notes-app-{}", note_id));
@@ -2669,10 +2635,6 @@ pub async fn recording_start(
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            // Don't leak the lock we just claimed if the sidecar won't start.
-            if let Some(id) = &claimed_lock_id {
-                cloud::release_recording_lock(&app, id.clone()).await;
-            }
             // Back out of Phase::Starting. Every phase-driven surface latches
             // the last one it saw — the recording bar, and (since #21) the tray
             // icon and its Start/Stop items — so a start that gives up here
@@ -2788,7 +2750,7 @@ pub async fn recording_start(
         // through its drain (#182), so the stop state is what tells the two
         // apart.
         let state: tauri::State<AppState> = app_clone.state();
-        let (was_active, lock_id, lock_heartbeat) = {
+        let was_active = {
             let mut s = state.recording.lock();
             if s.note_id.as_deref() == Some(&note_id_clone)
                 && s.stop == crate::recording::StopState::None
@@ -2799,23 +2761,11 @@ pub async fn recording_start(
                 s.temp_dir = None;
                 s.reader = None;
                 s.inflight = Arc::new(parking_lot::Mutex::new(Vec::new()));
-                (true, s.lock_id.take(), s.lock_heartbeat.take())
+                true
             } else {
-                (false, None, None)
+                false
             }
         };
-        // Sidecar died without recording_stop — drop the lock so the note isn't
-        // pinned until the TTL lapses (the heartbeat would otherwise keep a dead
-        // recording's lock alive).
-        if let Some(hb) = lock_heartbeat {
-            hb.abort();
-        }
-        if let Some(id) = lock_id {
-            let app_rel = app_clone.clone();
-            tokio::spawn(async move {
-                cloud::release_recording_lock(&app_rel, id).await;
-            });
-        }
         if was_active {
             // Through `emit_status`, not a bare emit: the sidecar dying is still
             // a phase change, and the tray has to stop claiming a live capture.
@@ -2828,16 +2778,6 @@ pub async fn recording_start(
     });
 
     state.recording.lock().reader = Some(reader_handle);
-
-    // Attach the shared-note lock to the live session + start its heartbeat so a
-    // long meeting keeps the lock fresh. Stored on the session so recording_stop
-    // and the crash-recovery path can abort the heartbeat and release the lock.
-    if let Some(id) = claimed_lock_id {
-        let hb = cloud::spawn_lock_heartbeat(app.clone(), id.clone());
-        let mut s = state.recording.lock();
-        s.lock_id = Some(id);
-        s.lock_heartbeat = Some(hb);
-    }
 
     emit_status(&app, Some(&note_id), Phase::Recording);
     crate::menubar::show_main_window(&app);
@@ -2875,7 +2815,6 @@ pub async fn recording_select_language(
         s.language_choice.as_ref().ok_or("No language choice pending")?
             .send_replace(Some(crate::recording::CaptureLanguage { language, deferred }));
     }
-    state.sync.note_upserted(&note_id);
     let _ = app.emit("notes_changed", ());
     Ok(())
 }
@@ -2886,7 +2825,7 @@ pub async fn recording_stop(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let stop_pressed = std::time::Instant::now();
-    let (child, note_id, temp_dir, inflight, reader, lock_id, lock_heartbeat, deferred) = {
+    let (child, note_id, temp_dir, inflight, reader, deferred) = {
         let mut s = state.recording.lock();
         // `note_id` deliberately stays set until the post-stop snapshot: it is
         // what lets a chunk finishing during the drain append to the note live
@@ -2901,27 +2840,12 @@ pub async fn recording_stop(
         // list to keep `s` self-consistent for the next session.
         let inflight = std::mem::replace(&mut s.inflight, Arc::new(parking_lot::Mutex::new(Vec::new())));
         let reader = s.reader.take();
-        let lock_id = s.lock_id.take();
-        let lock_heartbeat = s.lock_heartbeat.take();
         // Read here rather than off the post-stop snapshot: the phase this
         // stop emits next has to carry it, and the snapshot is taken after the
         // drain.
         let deferred = !s.sink.transcribes_on_arrival();
-        (child, note_id, temp_dir, inflight, reader, lock_id, lock_heartbeat, deferred)
+        (child, note_id, temp_dir, inflight, reader, deferred)
     };
-
-    // Stop heartbeating and release the shared-note lock immediately, so a
-    // teammate can record next without waiting out the TTL. Best-effort: a
-    // missed release just lets the lock expire on its own.
-    if let Some(hb) = lock_heartbeat {
-        hb.abort();
-    }
-    if let Some(id) = lock_id {
-        let app_release = app.clone();
-        tokio::spawn(async move {
-            cloud::release_recording_lock(&app_release, id).await;
-        });
-    }
 
     // Everything in flight at stop-pressed is the drain's denominator; the
     // reader may still push a last chunk or two before the sidecar closes its
@@ -3396,7 +3320,6 @@ async fn post_stop_chain_inner(
         )
         .await;
         clock.record(|t| t.finalize_session_ms = ms_since(t_finalize));
-        session_changed_for_sync(&app, &note_id, &session_id);
         clear_temp_dir(temp_dir, clock).await;
         // The Idle the chain lands on is also what makes this pending take
         // visible: the note view re-reads its sessions on every phase
@@ -3491,15 +3414,6 @@ async fn post_stop_chain_inner(
         Err(e) => eprintln!("unify: failed, keeping per-take labels: {e}"),
     }
     clock.record(|t| t.unify_ms = ms_since(t_unify));
-    // The pipeline wrote the transcript directly (per-chunk during capture,
-    // then the labelled rewrite), bypassing the notes_* commands — so push it
-    // to the cloud now. Covers every diarize_and_apply exit path.
-    note_changed_for_sync(&app, &note_id);
-    // Ping the session AFTER the note (lower seq → the note record drains
-    // first, so the session's parent-note lookup resolves). Enqueues the
-    // note_sessions metadata push; the assets upload separately (the frontend
-    // fires cloud_upload_note_sessions once this chain lands on Idle).
-    session_changed_for_sync(&app, &note_id, &session_id);
     // Now that every step that needs the WAVs has finished, drop the temp dir.
     // Best-effort: a leftover dir is harmless.
     clear_temp_dir(temp_dir, clock).await;
@@ -3984,7 +3898,6 @@ pub async fn import_audio(
         note.expected_speakers = expected_speakers;
         note
     };
-    state.sync.note_upserted(&note.id);
     let note_id = note.id.clone();
 
     // Provider prereq (key / local model). Skipped vs. recording_start:
@@ -4056,8 +3969,6 @@ pub async fn import_audio(
         s.sink = Arc::new(CaptureSink::new(SinkMode::Live));
         // Fresh note → no prior transcript to prepend on diarize.
         *s.transcript_at_start.lock() = String::new();
-        // Import holds no cloud recording lock.
-        s.lock_id = None;
     }
 
     let app_clone = app.clone();
@@ -4404,7 +4315,6 @@ async fn transcribe_takes(
             break;
         }
         record_transcribed_take(app, note_id, &entry.id).await;
-        session_changed_for_sync(app, note_id, &entry.id);
         transcribed_chunks.extend(chunks);
     }
 
@@ -4465,30 +4375,6 @@ async fn transcribe_takes(
     eprintln!("{}", timings.summary());
     write_replay_timings(app, note_id, &timings).await;
 
-    // Push the rewritten `timeline.jsonl` of every take this run touched.
-    //
-    // `session_changed_for_sync` above only enqueues the *metadata* record;
-    // the binary assets are a separate channel (see the per-session asset sync
-    // comment in `commands::cloud`), and for a finished recording the frontend
-    // fires it off the `recording_status` idle. This path deliberately never
-    // emits one — so without this, a teammate gets the note's text and never
-    // its speaker labels or word timings until repair-on-open happens to catch
-    // it. From the backend rather than the view, so no other caller of
-    // `transcribe_note` can skip it.
-    //
-    // Spawned: it waits for the sync worker to have pushed the records it
-    // needs, which can take longer than the user should watch a spinner for.
-    // A no-op for Personal notes.
-    #[cfg(feature = "cloud")]
-    {
-        let app = app.clone();
-        let note_id = note_id.to_string();
-        tauri::async_runtime::spawn(async move {
-            if let Err(e) = cloud::upload_note_sessions(&app, &note_id, false).await {
-                eprintln!("transcribe: session asset upload for {note_id}: {e}");
-            }
-        });
-    }
     // Only now, with everything the successful takes earned committed and
     // pushed, does a mid-run failure become the run's outcome.
     if let Some(msg) = fatal {
@@ -7604,28 +7490,6 @@ fn emit_error(app: &AppHandle, note_id: Option<&str>, message: &str) {
     });
 }
 
-/// Tell the sync observer a note changed via a backend-driven write — recording
-/// transcript, re-diarize, or a timeline edit — that bypasses the `notes_*`
-/// commands (those ping the observer themselves; the manual transcript/speaker
-/// edits in the UI go through `notes_update`, so they're already covered). This
-/// enqueues a push so the generated transcript/summary actually replicate.
-/// No-op under the open-source `NoopSync`.
-pub(crate) fn note_changed_for_sync(app: &AppHandle, note_id: &str) {
-    app.state::<AppState>().sync.note_upserted(note_id);
-}
-
-/// Tell the sync observer a recording *session* was created or changed (#16) —
-/// a take finished recording/importing, or was re-diarized. Enqueues the
-/// `note_sessions` metadata push (the binary assets are uploaded separately,
-/// frontend-triggered). Without this explicit ping the session would never
-/// sync, since the pipeline writes it to disk outside the `notes_*` commands.
-/// No-op under the open-source `NoopSync`.
-fn session_changed_for_sync(app: &AppHandle, note_id: &str, session_id: &str) {
-    if session_id == sessions::LEGACY_SESSION_ID {
-        return; // synthesized legacy take — synced via the notes.audio path
-    }
-    app.state::<AppState>().sync.session_upserted(note_id, session_id);
-}
 
 fn sidecar_path(_app: &AppHandle) -> Result<PathBuf, String> {
     // 1) Production / `tauri build`: Tauri copies external binaries next to

@@ -1,0 +1,70 @@
+name: Release PR
+
+# Actions → Release PR → Run workflow → pick the bump. Commits the bump to dev and opens dev → main.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+
+      - name: Bump version
+        id: bump
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const cur = require("./package.json").version;
+            let [ma, mi, pa] = cur.split(".").map(Number);
+            const bump = process.env.BUMP;
+            if (bump === "major") [ma, mi, pa] = [ma + 1, 0, 0];
+            else if (bump === "minor") [mi, pa] = [mi + 1, 0];
+            else pa++;
+            const next = `${ma}.${mi}.${pa}`;
+            // Exact-match replace (not JSON rewrite) so each file keeps its formatting.
+            const edit = (file, from, to) => {
+              const src = fs.readFileSync(file, "utf8");
+              if (!src.includes(from)) throw new Error(`${file}: "${from}" not found`);
+              fs.writeFileSync(file, src.replace(from, to));
+            };
+            edit("package.json", `"version": "${cur}"`, `"version": "${next}"`);
+            edit("src-tauri/tauri.conf.json", `"version": "${cur}"`, `"version": "${next}"`);
+            edit("src-tauri/Cargo.toml", `\nversion = "${cur}"`, `\nversion = "${next}"`);
+            edit("src-tauri/Cargo.lock", `name = "humla"\nversion = "${cur}"`, `name = "humla"\nversion = "${next}"`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${next}\n`);
+          '
+          git diff --stat
+
+      - name: Commit to dev and open PR to main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore(release): $VERSION"
+          git push origin dev
+          BODY="Bumps the version to $VERSION.
+
+          Before merging: add the $VERSION entry to \`src/content/releases.ts\` (the tag build fails without it).
+          After merging: tag \`v$VERSION\` on main to publish the release."
+          if [[ -n "$(gh pr list --base main --head dev --state open --json number -q '.[0].number')" ]]; then
+            gh pr edit dev --title "Release v$VERSION" --body "$BODY"
+          else
+            gh pr create --base main --head dev --title "Release v$VERSION" --body "$BODY"
+          fi

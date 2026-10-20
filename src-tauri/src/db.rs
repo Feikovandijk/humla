@@ -504,35 +504,13 @@ pub fn move_note(conn: &Connection, id: &str, folder_id: Option<&str>) -> Result
     Ok(())
 }
 
-/// Set a note's visibility inside its workspace (#191).
-///
-/// Bumps `updated_at`, unlike `set_note_workspace` beside it and unlike the
-/// derived writes (`set_detected_language`, the speaker cache): this is a real
-/// decision by the user, and it has to win last-write-wins against a copy of the
-/// note on another device that has not heard about it yet.
+/// Mark a note private (#191). Nothing in the app sets this any more; tests use
+/// it to cover the retrieval filters that still honour the column.
+#[cfg(test)]
 pub fn set_note_private(conn: &Connection, id: &str, private: bool) -> Result<()> {
     conn.execute(
         "UPDATE notes SET private = ?1, updated_at = ?2 WHERE id = ?3",
         params![private, now_ms(), id],
-    )?;
-    Ok(())
-}
-
-/// Reassign a note to a different workspace (`""` = Personal/local-only).
-///
-/// Deliberately does NOT bump `updated_at`: a workspace move is not a content
-/// edit, so the note keeps its place in the activity-sorted lists instead of
-/// jumping to "Today". The sync layer still propagates the move (an explicit
-/// tombstone-in-old + upsert-in-new), and the push is resurrect-aware
-/// (`cloud_sync`'s `push_note`) so moving a note back into a workspace still
-/// wins last-write-wins over an earlier tombstone without a bumped timestamp.
-///
-/// Folders and clients belong to one workspace, so the note leaves both behind:
-/// an id kept from the old workspace names nothing in the new one.
-pub fn set_note_workspace(conn: &Connection, id: &str, workspace: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE notes SET workspace_id = ?1, folder_id = NULL, client_id = NULL WHERE id = ?2",
-        params![workspace, id],
     )?;
     Ok(())
 }
@@ -1064,17 +1042,6 @@ pub fn delete_setting(conn: &Connection, key: &str) -> Result<()> {
     Ok(())
 }
 
-/// Delete every setting whose key starts with `prefix` — for the per-entity
-/// families of rows (`roster_cache:<workspace_id>`) that have to be dropped
-/// wholesale when the thing they belong to ends.
-pub fn delete_settings_with_prefix(conn: &Connection, prefix: &str) -> Result<()> {
-    let mut stmt = conn.prepare_cached("DELETE FROM settings WHERE key GLOB ?1")?;
-    // GLOB, not LIKE: `_` is a single-char wildcard in LIKE, and these keys
-    // contain underscores.
-    stmt.execute(params![format!("{prefix}*")])?;
-    Ok(())
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SummaryPrompt {
     pub id: String,
@@ -1197,12 +1164,6 @@ pub enum ChatTarget {
 }
 
 impl ChatTarget {
-    /// Parse the optional note id an IPC command received. Shorthand for
-    /// [`Self::from_ids`] on the surfaces that can only ever name a note.
-    pub fn from_note_id(note_id: Option<String>) -> Result<Self, String> {
-        Self::from_ids(note_id, None)
-    }
-
     /// Parse the optional ids an IPC command received. The two are ALTERNATIVES,
     /// not composable — a thread is about a note or about a folder — so sending
     /// both is a caller bug rather than something to silently pick between.
@@ -1434,24 +1395,6 @@ pub fn get_conversation_by_id(conn: &Connection, id: &str) -> Result<Option<Conv
     }
 }
 
-/// The workspace handle whose `remote_id` maps to a given server conversation
-/// (issue #61). Lets the session-list reconcile server-authoritative workspace
-/// conversations back to their local handle rows without duplicating them.
-pub fn get_conversation_by_remote_id(
-    conn: &Connection,
-    tenant: &str,
-    remote_id: &str,
-) -> Result<Option<Conversation>> {
-    let mut stmt = conn.prepare_cached(&format!(
-        "SELECT {CONVERSATION_COLS} FROM conversations WHERE tenant = ?1 AND remote_id = ?2",
-    ))?;
-    match stmt.query_row(params![tenant, remote_id], map_conversation) {
-        Ok(c) => Ok(Some(c)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e.into()),
-    }
-}
-
 /// Create a fresh conversation with an explicit initial breadth (issue #61),
 /// returning the inserted row. Title starts NULL (set from the first user
 /// message); remote_id starts NULL (set later for a workspace handle).
@@ -1579,17 +1522,6 @@ fn backfill_conversation_titles(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Record the humla-cloud conversation record id for a workspace conversation
-/// (issue #50), so later turns resume it and read-through history can find it.
-/// Idempotent — a repeat with the same id is a no-op write.
-pub fn set_conversation_remote_id(conn: &Connection, id: &str, remote_id: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE conversations SET remote_id = ?1 WHERE id = ?2",
-        params![remote_id, id],
-    )?;
-    Ok(())
-}
-
 /// Persist a conversation's retrieval breadth (issue #58). The command layer
 /// validates the value against the {note, folder, all} vocabulary before
 /// calling this, so db.rs stays agnostic and just stores the string.
@@ -1597,21 +1529,6 @@ pub fn set_conversation_breadth(conn: &Connection, id: &str, breadth: &str) -> R
     conn.execute(
         "UPDATE conversations SET breadth = ?1 WHERE id = ?2",
         params![breadth, id],
-    )?;
-    Ok(())
-}
-
-/// Pin (or clear) the conversation's authorship filter (#103). `None` clears.
-/// Stored as the user id whose notes the conversation retrieves — see
-/// [`Conversation::owner_filter`] for why it isn't a boolean.
-pub fn set_conversation_owner_filter(
-    conn: &Connection,
-    id: &str,
-    owner: Option<&str>,
-) -> Result<()> {
-    conn.execute(
-        "UPDATE conversations SET owner_filter = ?1, updated_at = ?2 WHERE id = ?3",
-        params![owner.unwrap_or(""), now_ms(), id],
     )?;
     Ok(())
 }
@@ -3285,47 +3202,6 @@ pub(crate) fn settings_only_conn() -> Connection {
 mod tests {
     use super::*;
 
-    /// #191 — a note is shared until someone says otherwise, and saying so is a
-    /// real edit: it bumps `updated_at`, unlike the derived writes beside it,
-    /// because it has to beat a stale copy on another device.
-    #[test]
-    fn private_defaults_to_shared_and_a_change_is_a_real_edit() {
-        let dir = tempfile::tempdir().unwrap();
-        let conn = open(&dir.path().join("private.sqlite")).unwrap();
-        let note = create_note(&conn, "en", "meeting", "wsA").unwrap();
-        assert!(!note.private);
-
-        set_note_private(&conn, &note.id, true).unwrap();
-        let after = get_note(&conn, &note.id).unwrap();
-        assert!(after.private);
-        assert!(after.updated_at >= note.updated_at);
-
-        set_note_private(&conn, &note.id, false).unwrap();
-        assert!(!get_note(&conn, &note.id).unwrap().private);
-    }
-
-    /// A folder or client id from the old workspace names nothing in the new
-    /// one, and a note kept on it would sit in no folder view and also fail the
-    /// "No folder" filter. The move itself still leaves `updated_at` alone.
-    #[test]
-    fn workspace_move_leaves_folder_and_client_behind() {
-        let dir = tempfile::tempdir().unwrap();
-        let conn = open(&dir.path().join("move.sqlite")).unwrap();
-        let note = create_note(&conn, "en", "meeting", "wsA").unwrap();
-        let folder = create_folder(&conn, "Sales", "wsA").unwrap();
-        let client = create_client(&conn, "Acme", "wsA").unwrap();
-        move_note(&conn, &note.id, Some(&folder.id)).unwrap();
-        set_note_client(&conn, &note.id, Some(&client.id)).unwrap();
-        let filed = get_note(&conn, &note.id).unwrap();
-
-        set_note_workspace(&conn, &note.id, "wsB").unwrap();
-        let moved = get_note(&conn, &note.id).unwrap();
-        assert_eq!(moved.workspace_id, "wsB");
-        assert_eq!(moved.folder_id, None);
-        assert_eq!(moved.client_id, None);
-        assert_eq!(moved.updated_at, filed.updated_at);
-    }
-
     /// Issue #167 — the detected recording language round-trips and starts
     /// NULL.
     #[test]
@@ -3393,30 +3269,6 @@ mod tests {
         assert_eq!(list_folders(&conn, "wsA").unwrap().len(), 1);
         assert_eq!(list_folders(&conn, "").unwrap().len(), 1);
         assert_eq!(list_folders(&conn, "wsB").unwrap().len(), 0);
-    }
-
-    /// A workspace (Teams) conversation is keyed by tenant and carries a
-    /// remote_id once the server creates it (issue #50). Personal and workspace
-    /// conversations for the same Note are distinct rows; remote_id starts NULL.
-    #[test]
-    fn conversation_remote_id_round_trips_and_tenant_scopes() {
-        let dir = tempfile::tempdir().unwrap();
-        let conn = open(&dir.path().join("conv.sqlite")).unwrap();
-
-        let personal = create_conversation(&conn, CHAT_TENANT_PERSONAL, CHAT_SCOPE_NOTE, "note1", "note").unwrap();
-        let workspace = create_conversation(&conn, "wsA", CHAT_SCOPE_NOTE, "note1", "note").unwrap();
-        assert_ne!(personal.id, workspace.id, "same Note, different tenant → distinct conversations");
-        assert!(workspace.remote_id.is_none(), "no server id until the first turn");
-
-        set_conversation_remote_id(&conn, &workspace.id, "srvConv123").unwrap();
-        let reloaded = latest_conversation(&conn, "wsA", CHAT_SCOPE_NOTE, "note1").unwrap().unwrap();
-        assert_eq!(reloaded.remote_id.as_deref(), Some("srvConv123"));
-        // Round-trips by its server id too (the workspace session-list reconcile).
-        let by_remote = get_conversation_by_remote_id(&conn, "wsA", "srvConv123").unwrap().unwrap();
-        assert_eq!(by_remote.id, workspace.id);
-        // The personal conversation is untouched by the workspace one's remote id.
-        let personal_reload = latest_conversation(&conn, CHAT_TENANT_PERSONAL, CHAT_SCOPE_NOTE, "note1").unwrap().unwrap();
-        assert!(personal_reload.remote_id.is_none());
     }
 
     /// `ListFilter::WithMessages` hides conversations that hold no messages, and
@@ -3589,42 +3441,8 @@ mod tests {
         assert_eq!(reloaded.breadth, "all", "breadth survives a re-open (idempotent migration)");
     }
 
-    /// The authorship pin (#103) defaults to off, round-trips, clears, and — the
-    /// part that matters — survives a re-open. An existing conversation must
-    /// back-fill to "" rather than to anything that would narrow retrieval:
-    /// its scrollback was written over the whole workspace.
-    #[test]
-    fn conversation_owner_filter_defaults_off_and_persists_idempotently() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("owner.sqlite");
-        let reload = |conn: &Connection| {
-            latest_conversation(conn, CHAT_TENANT_PERSONAL, CHAT_SCOPE_NOTE, "note1")
-                .unwrap()
-                .unwrap()
-        };
-        {
-            let conn = open(&path).unwrap();
-            let conv =
-                create_conversation(&conn, CHAT_TENANT_PERSONAL, CHAT_SCOPE_NOTE, "note1", "note")
-                    .unwrap();
-            assert_eq!(conv.owner_filter, "", "a new conversation is unpinned");
-            set_conversation_owner_filter(&conn, &conv.id, Some("u-anna")).unwrap();
-            assert_eq!(reload(&conn).owner_filter, "u-anna", "the pin round-trips");
-            set_conversation_owner_filter(&conn, &conv.id, None).unwrap();
-            assert_eq!(reload(&conn).owner_filter, "", "None clears the pin");
-            set_conversation_owner_filter(&conn, &conv.id, Some("u-anna")).unwrap();
-        }
-        let conn = open(&path).unwrap();
-        assert_eq!(
-            reload(&conn).owner_filter,
-            "u-anna",
-            "the pin survives a re-open (idempotent migration)"
-        );
-    }
-
     /// Both pins default to off, round-trip, clear, and survive a re-open — and,
-    /// the part a per-pin test cannot see, stay independent of each other and of
-    /// the authorship pin.
+    /// the part a per-pin test cannot see, stay independent of each other.
     #[test]
     fn conversation_client_and_speaker_pins_are_independent_and_persist() {
         let dir = tempfile::tempdir().unwrap();
@@ -3644,23 +3462,19 @@ mod tests {
 
             set_conversation_client_filter(&conn, &conv.id, Some("c-acme")).unwrap();
             set_conversation_speaker_filter(&conn, &conv.id, Some("Hege Tronshaugen")).unwrap();
-            set_conversation_owner_filter(&conn, &conv.id, Some("u-anna")).unwrap();
             let got = reload(&conn);
             assert_eq!(got.client_filter, "c-acme", "the Client pin round-trips");
             assert_eq!(got.speaker_filter, "Hege Tronshaugen", "the speaker pin round-trips");
-            assert_eq!(got.owner_filter, "u-anna", "and the authorship pin is untouched");
 
             // Clearing one leaves the other two alone — the case a per-pin test misses.
             set_conversation_client_filter(&conn, &conv.id, None).unwrap();
             let got = reload(&conn);
             assert_eq!(got.client_filter, "", "None clears the Client pin");
             assert_eq!(got.speaker_filter, "Hege Tronshaugen", "without touching the speaker pin");
-            assert_eq!(got.owner_filter, "u-anna", "or the authorship pin");
         }
         let conn = open(&path).unwrap();
         let got = reload(&conn);
         assert_eq!(got.speaker_filter, "Hege Tronshaugen", "the pin survives a re-open");
-        assert_eq!(got.owner_filter, "u-anna", "idempotent migration, all three columns");
     }
 
     /// Migration idempotency + first-session preservation (issue #61). Seeds a
@@ -4829,36 +4643,6 @@ mod tests {
     }
 
     #[test]
-    fn deleting_settings_by_prefix_takes_the_family_and_nothing_else() {
-        let dir = tempfile::tempdir().unwrap();
-        let conn = open(&dir.path().join("t.sqlite")).unwrap();
-        set_setting(&conn, "roster_cache:ws_a", "[]").unwrap();
-        set_setting(&conn, "roster_cache:ws_b", "[]").unwrap();
-        set_setting(&conn, "language", "nb").unwrap();
-
-        delete_settings_with_prefix(&conn, "roster_cache:").unwrap();
-
-        assert!(get_setting(&conn, "roster_cache:ws_a").unwrap().is_none());
-        assert!(get_setting(&conn, "roster_cache:ws_b").unwrap().is_none());
-        assert_eq!(get_setting(&conn, "language").unwrap().as_deref(), Some("nb"));
-    }
-
-    #[test]
-    fn deleting_settings_by_prefix_does_not_treat_underscores_as_wildcards() {
-        let dir = tempfile::tempdir().unwrap();
-        let conn = open(&dir.path().join("t.sqlite")).unwrap();
-        // The trap GLOB avoids: under LIKE, `_` matches any single character, so
-        // a prefix containing one would reach unrelated keys.
-        set_setting(&conn, "local_llm_model", "gemma").unwrap();
-        set_setting(&conn, "localxllm_model", "other").unwrap();
-
-        delete_settings_with_prefix(&conn, "local_llm").unwrap();
-
-        assert!(get_setting(&conn, "local_llm_model").unwrap().is_none());
-        assert_eq!(get_setting(&conn, "localxllm_model").unwrap().as_deref(), Some("other"));
-    }
-
-    #[test]
     fn speaker_label_stats_counts_notes_per_label_and_ignores_the_trash() {
         let dir = tempfile::tempdir().unwrap();
         let conn = open(&dir.path().join("t.sqlite")).unwrap();
@@ -5417,22 +5201,6 @@ mod tests {
         let all = [CHAT_SCOPE_NOTE, CHAT_SCOPE_FOLDER, CHAT_SCOPE_GLOBAL];
         let unique: std::collections::BTreeSet<_> = all.iter().collect();
         assert_eq!(unique.len(), all.len());
-    }
-
-    /// Absent means global; EMPTY is an error. Letting `""` mean global is the
-    /// trap humla-cloud#26 avoided server-side — a typo must not silently become
-    /// a library-wide conversation.
-    #[test]
-    fn an_absent_note_id_is_global_but_an_empty_one_is_an_error() {
-        assert_eq!(ChatTarget::from_note_id(None).unwrap(), ChatTarget::Global);
-        assert_eq!(
-            ChatTarget::from_note_id(Some("n1".into())).unwrap(),
-            ChatTarget::Note("n1".into())
-        );
-        for empty in ["", "   ", "\t"] {
-            let err = ChatTarget::from_note_id(Some(empty.into())).unwrap_err();
-            assert!(err.contains("empty id"), "got: {err}");
-        }
     }
 
     /// #110's last acceptance criterion: deleting a folder must leave its

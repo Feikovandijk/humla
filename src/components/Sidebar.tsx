@@ -19,11 +19,9 @@ import { ipc, type Folder, type Note } from "../lib/ipc";
 import { cn } from "../lib/cn";
 import { ContextMenu, ContextMenuItem } from "./ContextMenu";
 import { Modal } from "../pages/settings/components/Modal";
-import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { SetupNag } from "./SetupNag";
 import { ImportDialog } from "./ImportDialog";
 import { ChatConversations } from "./ChatConversations";
-import { useCloudStore } from "../lib/cloud";
 import { trafficLightSpacerCssPx, useZoomStore } from "../lib/zoom";
 
 // Humla mark sourced from humla-small.svg — single-path silhouette of
@@ -199,8 +197,6 @@ export function Sidebar({ onCollapse }: { onCollapse: () => void }) {
         </button>
       </div>
 
-      <WorkspaceSwitcher />
-
       {/* .nd-bar owns height, side padding and radius — graphite's recipe names
           all three for a bar, and they differ from its nav rows. */}
       <div className="no-drag nd-bar mt-2.5">
@@ -341,7 +337,6 @@ export function Sidebar({ onCollapse }: { onCollapse: () => void }) {
         active={location.pathname.startsWith("/settings")}
         title="⌘,"
       />
-      <AccountRow />
 
       {importPath && (
         <ImportDialog
@@ -477,25 +472,13 @@ function FolderRow({
   }
 
   async function commitDelete(threads: { id: string }[] | null) {
-    // Delete the conversations FIRST, and through the normal per-conversation
-    // command rather than by dropping local rows (#110).
-    //
-    // In a workspace a folder thread is server-authoritative — the local row is
-    // only a handle — so `db::delete_folder`'s local cascade would leave the real
-    // thread alive on the server, pointing at a folder that no longer exists:
-    // unreachable, still listed for teammates, and clamping to nothing. That
-    // command is also where the server's own rule lives (only the thread's
-    // creator, or a workspace owner/admin, may delete one).
-    //
-    // So a refusal ABORTS the folder delete rather than being swallowed. A folder
-    // that half-deleted — gone locally, its threads still on the server — is worse
-    // than one that didn't delete, because nothing would ever offer to finish it.
+    // Delete the conversations FIRST, through the normal per-conversation
+    // command (#110). A refusal ABORTS the folder delete rather than being
+    // swallowed, so a folder never half-deletes.
     setDeleteError(null);
     try {
       // A listing that failed at menu time is retried here rather than treated as
-      // an empty one. Without it, "delete anyway" would delete the folder while
-      // every server-side thread survived pointing at it — precisely the orphan
-      // this whole function exists to prevent.
+      // an empty one.
       const doomed =
         threads ??
         (await ipc.chatListConversations({ kind: "folder", folderId: folder.id }));
@@ -651,27 +634,3 @@ function NoteRow({
   );
 }
 
-// Signed-in profile presence pinned at the bottom of the nav. Hidden when
-// signed out (the workspace switcher already offers a sign-in affordance).
-function AccountRow() {
-  const status = useCloudStore((s) => s.status);
-  if (!status.logged_in || !status.user) return null;
-  const u = status.user;
-  return (
-    <Link
-      to="/settings?tab=account"
-      className="no-drag flex items-center gap-2.5 mt-1 px-2 py-2 rounded-[var(--radius)] hover:bg-[var(--color-pill-hover)] transition-colors"
-      title="Account"
-    >
-      <span className="shrink-0 grid place-items-center w-6 h-6 rounded-full bg-[var(--color-surface-raised)] text-[11px] font-semibold text-[var(--color-text)]">
-        {(u.name || u.email).slice(0, 1).toUpperCase()}
-      </span>
-      <span className="flex-1 min-w-0 flex flex-col leading-tight">
-        <span className="truncate text-[13px] text-[var(--color-text)]">{u.name || u.email}</span>
-        {u.name && (
-          <span className="truncate text-[11px] text-[var(--color-text-disabled)]">{u.email}</span>
-        )}
-      </span>
-    </Link>
-  );
-}

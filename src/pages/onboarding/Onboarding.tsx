@@ -27,7 +27,6 @@ import { PermissionsStep } from "./steps/Permissions";
 import { LanguageStep } from "./steps/Language";
 import { TranscriptionStep } from "./steps/Transcription";
 import { SummaryStep } from "./steps/Summary";
-import { CloudStep } from "./steps/Cloud";
 import { DoneStep } from "./steps/Done";
 
 // The step registry. Order comes from STEP_ORDER; this maps each ID to its
@@ -38,7 +37,6 @@ const STEPS: StepDef[] = [
   { id: "language", Component: LanguageStep },
   { id: "transcription", Component: TranscriptionStep },
   { id: "summary", Component: SummaryStep },
-  { id: "cloud", Component: CloudStep },
   { id: "done", Component: DoneStep },
 ];
 

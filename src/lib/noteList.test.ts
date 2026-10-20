@@ -227,16 +227,6 @@ describe("matchesFilter", () => {
     expect(matchesFilter(note({ folder_id: "f1" }), { ...NO_FILTER, folder: UNASSIGNED })).toBe(false);
   });
 
-  it("counts an unsynced note as the signed-in user's own", () => {
-    const mine = { ...NO_FILTER, owner: "u-me" };
-    expect(matchesFilter(note({ owner: "" }), mine, { myId: "u-me" })).toBe(true);
-    expect(matchesFilter(note({ owner: "u-anna" }), mine, { myId: "u-me" })).toBe(false);
-    // Someone else's pin never absorbs an ownerless note.
-    expect(matchesFilter(note({ owner: "" }), { ...NO_FILTER, owner: "u-anna" }, { myId: "u-me" })).toBe(
-      false,
-    );
-  });
-
   it("requires every set axis", () => {
     const f = { ...NO_FILTER, state: "notes" as const, client: "c1" };
     expect(matchesFilter(note({ body: "<p>b</p>", client_id: "c1" }), f)).toBe(true);

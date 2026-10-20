@@ -228,7 +228,6 @@ describe("TranscriptPlayer per-turn editing (#170)", () => {
     mockTauri({
       note_session_playback_path: () => null,
       note_timeline_set_chunk_text: record("note_timeline_set_chunk_text"),
-      cloud_upload_note_sessions: record("cloud_upload_note_sessions"),
     });
   });
 
@@ -265,7 +264,7 @@ describe("TranscriptPlayer per-turn editing (#170)", () => {
     return screen.getByRole("textbox") as HTMLTextAreaElement;
   }
 
-  it("sends the whole turn's chunk indices in one call and re-uploads the timeline", async () => {
+  it("sends the whole turn's chunk indices in one call", async () => {
     const setTimeline = vi.fn();
     renderPlayer({
       sessions: [session({ id: "s1", hasPlayback: false })],
@@ -292,11 +291,6 @@ describe("TranscriptPlayer per-turn editing (#170)", () => {
     // The optimistic local update keeps the reader showing the edit before
     // `transcript_replaced` lands.
     expect(setTimeline).toHaveBeenCalled();
-    // A workspace note's rewritten timeline is pushed; Personal short-circuits
-    // in the backend.
-    await waitFor(() =>
-      expect(calls.some((c) => c.cmd === "cloud_upload_note_sessions")).toBe(true),
-    );
   });
 
   it("enter commits, since a turn is one transcript line", async () => {

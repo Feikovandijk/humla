@@ -345,11 +345,7 @@ async fn write_generated_title(
             title: Some(title.clone()),
             ..Default::default()
         })?;
-    } // drop the db guard before pinging sync (see the SyncObserver contract)
-    // A Title is real content a teammate must see, so unlike the derived
-    // local-only writes (`set_detected_language`, `speakers`) this one bumps
-    // `updated_at` and goes to the workspace.
-    state.sync.note_upserted(note_id);
+    }
     // Backend write — the notes store never asked for it, so tell it. This is
     // what puts the new Title in the sidebar, and (via the Note view's guarded
     // adopt) in an open note's title box.

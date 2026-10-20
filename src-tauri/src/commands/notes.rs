@@ -10,13 +10,10 @@ use tauri::{AppHandle, Manager, State};
 #[tauri::command]
 pub fn notes_list(state: State<AppState>) -> Result<Vec<Note>, String> {
     let conn = state.db.lock();
-    // Scope to the active workspace ("" = Personal) so one workspace's notes
-    // never bleed into another's view.
-    let workspace = super::cloud::active_workspace(&conn);
-    db::list_notes(&conn, &workspace).map_err(err)
+    db::list_notes(&conn, "").map_err(err)
 }
 
-/// Every distinct speaker label in the active workspace, with usage counters —
+/// Every distinct speaker label in the library, with usage counters —
 /// the suggestion source for the rename picker (#116 part 1).
 ///
 /// Fetched once when the speaker strip mounts; the picker then filters and ranks
@@ -24,40 +21,13 @@ pub fn notes_list(state: State<AppState>) -> Result<Vec<Note>, String> {
 #[tauri::command]
 pub fn speaker_label_stats(state: State<AppState>) -> Result<Vec<db::SpeakerLabelStat>, String> {
     let conn = state.db.lock();
-    let workspace = super::cloud::active_workspace(&conn);
-    db::speaker_label_stats(&conn, &workspace).map_err(err)
+    db::speaker_label_stats(&conn, "").map_err(err)
 }
 
 #[tauri::command]
 pub fn notes_get(state: State<AppState>, id: String) -> Result<Note, String> {
     let conn = state.db.lock();
     db::get_note(&conn, &id).map_err(err)
-}
-
-/// Where the sticky visibility default is stored, per workspace (#191).
-///
-/// Per workspace and not globally: "private" is the honest answer in a client's
-/// shared workspace and the wrong one in your own, and a single global setting
-/// would carry one workspace's habit into the next.
-pub(crate) fn visibility_default_key(workspace: &str) -> String {
-    format!("note_private_default:{workspace}")
-}
-
-/// Whether a new note in `workspace` starts private.
-///
-/// Shared unless the user's last explicit choice in THIS workspace was private —
-/// today's behaviour for anyone who never touches the chip, and a habit that
-/// carries for anyone who does. Personal notes are private by definition and the
-/// flag means nothing there, so the question is never asked.
-pub(crate) fn default_private(conn: &rusqlite::Connection, workspace: &str) -> bool {
-    if workspace.is_empty() {
-        return false;
-    }
-    db::get_setting(conn, &visibility_default_key(workspace))
-        .ok()
-        .flatten()
-        .as_deref()
-        == Some("1")
 }
 
 #[tauri::command]
@@ -74,19 +44,8 @@ pub fn notes_create(state: State<AppState>) -> Result<Note, String> {
             .map_err(err)?
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| "meeting".to_string());
-        // Stamp the note with the active workspace so it syncs there (and only
-        // shows there). Personal ("") notes stay local.
-        let workspace = super::cloud::active_workspace(&conn);
-        let note =
-            db::create_note(&conn, &default_language, &default_preset, &workspace).map_err(err)?;
-        if default_private(&conn, &workspace) {
-            db::set_note_private(&conn, &note.id, true).map_err(err)?;
-            db::get_note(&conn, &note.id).map_err(err)?
-        } else {
-            note
-        }
-    }; // drop the db guard before pinging sync (see SyncObserver contract)
-    state.sync.note_upserted(&note.id);
+        db::create_note(&conn, &default_language, &default_preset, "").map_err(err)?
+    };
     Ok(note)
 }
 
@@ -96,7 +55,6 @@ pub fn notes_update(state: State<AppState>, id: String, patch: NotePatch) -> Res
         let conn = state.db.lock();
         db::update_note(&conn, &id, &patch).map_err(err)?;
     }
-    state.sync.note_upserted(&id);
     Ok(())
 }
 
@@ -106,22 +64,17 @@ pub fn notes_delete(state: State<AppState>, id: String) -> Result<(), String> {
         let conn = state.db.lock();
         db::delete_note(&conn, &id).map_err(err)?;
     }
-    // Soft-delete (Trash): the row stays for restore, but the sync layer records
-    // a tombstone so the deletion still propagates to other devices.
-    state.sync.note_deleted(&id);
     Ok(())
 }
 
-/// Notes in the Trash for the active workspace (soft-deleted, recoverable).
+/// Notes in the Trash (soft-deleted, recoverable).
 #[tauri::command]
 pub fn notes_list_trash(state: State<AppState>) -> Result<Vec<Note>, String> {
     let conn = state.db.lock();
-    let workspace = super::cloud::active_workspace(&conn);
-    db::list_trashed_notes(&conn, &workspace).map_err(err)
+    db::list_trashed_notes(&conn, "").map_err(err)
 }
 
-/// Restore a note from the Trash. Re-pushes it (un-tombstone) so it also
-/// reappears for teammates.
+/// Restore a note from the Trash.
 #[tauri::command]
 pub fn notes_restore(state: State<AppState>, id: String) -> Result<Note, String> {
     let note = {
@@ -129,12 +82,10 @@ pub fn notes_restore(state: State<AppState>, id: String) -> Result<Note, String>
         db::restore_note(&conn, &id).map_err(err)?;
         db::get_note(&conn, &id).map_err(err)?
     };
-    state.sync.note_upserted(&id);
     Ok(note)
 }
 
-/// Permanently delete a note from the Trash (hard delete, not recoverable). The
-/// server copy is already tombstoned from the soft-delete, so this is local-only.
+/// Permanently delete a note from the Trash (hard delete, not recoverable).
 ///
 /// Purge is the point of no return, so every file the note keeps on disk goes
 /// with it ([`purge_note_assets`]). Soft delete deliberately does NOT touch these
@@ -159,7 +110,7 @@ pub(crate) fn purge_note_assets_best_effort(app: &AppHandle, note_id: &str) {
 }
 
 /// For the end of a chain that writes a note's files, after its last write: a
-/// note purged or withdrawn while the chain ran must not get back what it wrote.
+/// note purged while the chain ran must not get back what it wrote.
 /// A trashed note keeps its row, and so its files.
 pub(crate) fn purge_note_assets_if_gone(app: &AppHandle, note_id: &str) {
     let state = app.state::<AppState>();
@@ -195,7 +146,7 @@ pub fn notes_revisions(state: State<AppState>, id: String) -> Result<Vec<db::Not
 }
 
 /// Restore a note to a saved revision; the current state is snapshotted first so
-/// it's undoable. Syncs the restored content.
+/// it's undoable.
 #[tauri::command]
 pub fn notes_restore_revision(
     state: State<AppState>,
@@ -207,7 +158,6 @@ pub fn notes_restore_revision(
         db::restore_note_revision(&conn, &id, &revision_id).map_err(err)?;
         db::get_note(&conn, &id).map_err(err)?
     };
-    state.sync.note_upserted(&id);
     Ok(note)
 }
 
@@ -220,93 +170,6 @@ pub fn notes_move(
     {
         let conn = state.db.lock();
         db::move_note(&conn, &id, folder_id.as_deref()).map_err(err)?;
-    }
-    state.sync.note_upserted(&id); // move bumps updated_at; treat as an upsert
-    Ok(())
-}
-
-/// Move a note to a different workspace (`""` = Personal/local-only). Lets a
-/// note recorded in Personal be shared to a team, or moved between workspaces.
-/// The sync layer tombstones it in the old workspace and recreates it in the new
-/// one (they're distinct remote records keyed on `(workspace, client_id)`).
-#[tauri::command]
-pub fn notes_set_workspace(
-    state: State<AppState>,
-    id: String,
-    workspace_id: String,
-) -> Result<(), String> {
-    let from = {
-        let conn = state.db.lock();
-        let note = db::get_note(&conn, &id).map_err(err)?;
-        if note.workspace_id == workspace_id {
-            return Ok(()); // already there — nothing to do
-        }
-        db::set_note_workspace(&conn, &id, &workspace_id).map_err(err)?;
-        note.workspace_id
-    };
-    state.sync.note_moved(&id, &from, &workspace_id);
-    Ok(())
-}
-
-/// Whether `me` may change the visibility of a note owned by `owner`.
-///
-/// Only the author, and a workspace owner is not an exception — anything else
-/// makes the word a lie. An empty `owner` is a note that has never synced, which
-/// is this device's own; an unknown `me` (no cached session) can only act on one
-/// of those. Mirrored by the client, which hides the control rather than offering
-/// one that fails.
-pub(crate) fn may_change_visibility(owner: &str, me: &str) -> bool {
-    owner.is_empty() || (!me.is_empty() && owner == me)
-}
-
-/// Set a note's visibility inside its workspace (#191).
-///
-/// Two things happen on the way to private and only one of them is the note
-/// itself: teammates who already synced it hold a complete copy, and a record
-/// that leaves their view produces no pull event — so the sync layer is told
-/// about the TRANSITION, not just the new value.
-///
-/// Also remembers the choice as this workspace's default for the next note.
-#[tauri::command]
-pub fn notes_set_private(
-    state: State<AppState>,
-    id: String,
-    private: bool,
-) -> Result<(), String> {
-    {
-        let conn = state.db.lock();
-        let note = db::get_note(&conn, &id).map_err(err)?;
-        // A Personal note is private already and has no workspace to be private
-        // from; letting the flag be set there would only bank a default that the
-        // next Personal note ignores.
-        if note.workspace_id.is_empty() {
-            return Err("A note outside a workspace is already private.".into());
-        }
-        // The server refuses a non-author's write too; refusing here keeps the local
-        // row from disagreeing with it until the next pull, and keeps a revocation
-        // the server will reject out of the outbox, where it would retry forever.
-        if !may_change_visibility(&note.owner, &super::cloud_auth::current_user_id()) {
-            return Err("Only the note's author can change who can read it.".into());
-        }
-        // Banked BEFORE the no-op check: the default follows what the user CHOSE,
-        // and choosing the answer a note already has is still choosing it. Behind
-        // the check, picking Shared on an already-shared note recorded nothing and
-        // the next note stayed private.
-        db::set_setting(
-            &conn,
-            &visibility_default_key(&note.workspace_id),
-            if private { "1" } else { "0" },
-        )
-        .map_err(err)?;
-        if note.private == private {
-            return Ok(());
-        }
-        db::set_note_private(&conn, &id, private).map_err(err)?;
-    }
-    if private {
-        state.sync.note_withdrawn(&id);
-    } else {
-        state.sync.note_upserted(&id);
     }
     Ok(())
 }
@@ -384,38 +247,6 @@ mod tests {
             assert!(d.exists(), "{} must survive", d.display());
         }
         assert!(outside.exists(), "nothing outside the app data dir is reachable");
-    }
-
-    /// #191 — visibility is sticky per workspace, and shared until the user says
-    /// otherwise. The default has to stay "shared" for anyone who never touches
-    /// the chip, in a workspace they have never expressed an opinion about.
-    #[test]
-    fn visibility_default_is_shared_until_chosen_and_is_per_workspace() {
-        let dir = tempfile::tempdir().unwrap();
-        let conn = crate::db::open(&dir.path().join("visibility.sqlite")).unwrap();
-        assert!(!super::default_private(&conn, "wsA"));
-
-        crate::db::set_setting(&conn, &super::visibility_default_key("wsA"), "1").unwrap();
-        assert!(super::default_private(&conn, "wsA"));
-        // A habit in one workspace is not a habit in the next.
-        assert!(!super::default_private(&conn, "wsB"));
-        // Personal has no workspace to be private from, so it never asks.
-        assert!(!super::default_private(&conn, ""));
-
-        crate::db::set_setting(&conn, &super::visibility_default_key("wsA"), "0").unwrap();
-        assert!(!super::default_private(&conn, "wsA"));
-    }
-
-    /// #191 — the author decides, and a workspace owner is not an exception.
-    #[test]
-    fn only_the_author_may_change_a_notes_visibility() {
-        assert!(super::may_change_visibility("u-me", "u-me"));
-        assert!(!super::may_change_visibility("u-bob", "u-me"), "not even as workspace owner");
-        // Never synced → no owner → this device's own note.
-        assert!(super::may_change_visibility("", "u-me"));
-        assert!(super::may_change_visibility("", ""));
-        // A synced note with no cached session can't be proven ours.
-        assert!(!super::may_change_visibility("u-me", ""));
     }
 
     #[test]

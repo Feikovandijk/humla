@@ -170,8 +170,7 @@ pub fn session_write_dir(recordings_dir: &Path, session_id: &str) -> PathBuf {
 /// smuggled in from a remote `note_sessions.client_id` or a tampered
 /// `sessions.json`. Rejecting it at every point where manifest/remote data
 /// becomes a path stops directory traversal (e.g. `../../../Desktop` reaching
-/// `remove_dir_all`). Mirrors `cloud_sync::is_safe_id`, whose remote pull path
-/// guards the same way. Note `__legacy__` passes (underscores only).
+/// `remove_dir_all`). Note `__legacy__` passes (underscores only).
 pub fn is_safe_session_id(id: &str) -> bool {
     !id.is_empty() && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
 }
@@ -447,180 +446,6 @@ pub fn existing_session_count(recordings_dir: &Path) -> usize {
 }
 
 // ---------------------------------------------------------------------------
-// Cloud sync (#16) — pure helpers shared by the asset upload/download path in
-// `commands::cloud`. Kept here (over `crate::sessions` FS state) so they can be
-// unit-tested without a Tauri `AppHandle` or a live PocketBase.
-// ---------------------------------------------------------------------------
-
-/// One per-session asset file, matching the five typed file fields on the
-/// server's `note_sessions` collection. The `field` name is both the
-/// PocketBase record key and the multipart form-part name; `file` is the local
-/// filename inside a session dir.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AssetField {
-    Playback,
-    Mic,
-    Sys,
-    Timeline,
-    Chunks,
-}
-
-impl AssetField {
-    /// All five fields, in a stable order.
-    pub const ALL: [AssetField; 5] = [
-        AssetField::Playback,
-        AssetField::Mic,
-        AssetField::Sys,
-        AssetField::Timeline,
-        AssetField::Chunks,
-    ];
-
-    /// The `note_sessions` field / multipart part name.
-    pub fn field(self) -> &'static str {
-        match self {
-            AssetField::Playback => "playback",
-            AssetField::Mic => "mic",
-            AssetField::Sys => "sys",
-            AssetField::Timeline => "timeline",
-            AssetField::Chunks => "chunks",
-        }
-    }
-
-    /// The local filename inside a session dir.
-    pub fn file_name(self) -> &'static str {
-        match self {
-            AssetField::Playback => "playback.wav",
-            AssetField::Mic => "mic.wav",
-            AssetField::Sys => "sys.wav",
-            AssetField::Timeline => "timeline.jsonl",
-            AssetField::Chunks => "chunks.json",
-        }
-    }
-
-    /// Whether this asset is *audio* — the thing `keep_audio` governs (#24).
-    /// `timeline` and `chunks` are text (word timings / chunk timings) and are
-    /// kept regardless: they drive the merged reader and the re-diarize anchors,
-    /// and they carry no recording of anyone's voice.
-    pub fn is_audio(self) -> bool {
-        matches!(
-            self,
-            AssetField::Playback | AssetField::Mic | AssetField::Sys
-        )
-    }
-
-    /// The MIME type to stamp on the multipart upload. The JSON-ish assets go
-    /// up as octet-stream (the server's timeline/chunks fields have no mime
-    /// restriction — jsonl/json content-sniff inconsistently).
-    pub fn mime(self) -> &'static str {
-        match self {
-            AssetField::Playback | AssetField::Mic | AssetField::Sys => "audio/wav",
-            AssetField::Timeline | AssetField::Chunks => "application/octet-stream",
-        }
-    }
-}
-
-/// Decide which asset fields to (re-)upload for one session, given which are
-/// present on disk locally and which already have a file on the server.
-///
-/// Rules (the "upload sequencing" decision, unit-tested):
-///  - `timeline` is uploaded whenever it exists locally — it's rewritten by
-///    re-diarize / cross-session unification and is tiny, so teammates always
-///    get the latest speaker labels.
-///  - every other asset is uploaded only once (when present locally but not yet
-///    on the server), so a long recording's multi-hundred-MB `mic`/`sys`/
-///    `playback` WAVs aren't re-sent on every subsequent timeline edit.
-pub fn session_upload_plan(
-    local_present: &[AssetField],
-    remote_present: &[AssetField],
-) -> Vec<AssetField> {
-    AssetField::ALL
-        .into_iter()
-        .filter(|f| {
-            let local = local_present.contains(f);
-            if !local {
-                return false;
-            }
-            matches!(f, AssetField::Timeline) || !remote_present.contains(f)
-        })
-        .collect()
-}
-
-/// The *repair* variant of [`session_upload_plan`]: only the assets the server
-/// is missing outright, never a re-send of one it already holds.
-///
-/// The full plan runs after an event that changed the timeline (a recording
-/// finishing, a re-diarize, a speaker rename), so re-sending it is the point.
-/// This one runs opportunistically on note open, to close the window where the
-/// author's post-recording upload never happened at all — the asset PATCH is a
-/// separate fire-and-forget call from the sync worker's metadata push, so
-/// quitting the app (or losing the network) in the minute after a recording
-/// leaves the session records on the server with no `timeline` file attached,
-/// and nothing retries. Teammates then see a note with sessions but no speaker
-/// labels. Repair-on-open is that retry, and it stays cheap by never re-sending
-/// what is already up.
-pub fn session_repair_plan(
-    local_present: &[AssetField],
-    remote_present: &[AssetField],
-) -> Vec<AssetField> {
-    AssetField::ALL
-        .into_iter()
-        .filter(|f| local_present.contains(f) && !remote_present.contains(f))
-        .collect()
-}
-
-/// Drop the audio assets from an upload plan when this device is set not to
-/// sync audio. The setting is about *recordings*, so it must not take the
-/// timeline down with them: withholding word timings doesn't protect anything
-/// (they carry no voice) and costs teammates every speaker label in the note.
-pub fn retain_syncable(plan: Vec<AssetField>, sync_audio: bool) -> Vec<AssetField> {
-    if sync_audio {
-        return plan;
-    }
-    plan.into_iter().filter(|f| !f.is_audio()).collect()
-}
-
-/// Whether an asset already on disk is worth re-fetching when the server's copy
-/// changed. Only the timeline: it is small text that the author *rewrites* after
-/// the fact (re-diarize, cross-session unification, speaker rename), so a cached
-/// copy silently pins the reader to stale labels. Audio is immutable per take
-/// and can be hundreds of MB — fetched once, never again.
-pub fn refetch_when_changed(field: AssetField) -> bool {
-    matches!(field, AssetField::Timeline)
-}
-
-/// Decide whether to fetch one asset, given what's on disk and what the server
-/// holds.
-///
-/// `stamp` is the remote filename recorded when this device last downloaded the
-/// asset (see [`remote_stamp_path`]). PocketBase mints a fresh random suffix on
-/// every upload (`timeline_x7rwstj5qc.jsonl`), so a differing filename is an
-/// exact "the server's copy is not the one I have" signal — no clock comparison,
-/// no skew.
-pub fn should_fetch_asset(
-    field: AssetField,
-    dest_exists: bool,
-    stamp: Option<&str>,
-    remote_filename: &str,
-) -> bool {
-    if remote_filename.is_empty() {
-        return false; // nothing attached to the record
-    }
-    if !dest_exists {
-        return true;
-    }
-    if !refetch_when_changed(field) {
-        return false;
-    }
-    stamp != Some(remote_filename)
-}
-
-/// Where the last-downloaded remote filename for an asset is recorded, beside
-/// the asset itself. A dotfile so it never looks like a recording artefact.
-pub fn remote_stamp_path(session_dir: &Path, field: AssetField) -> PathBuf {
-    session_dir.join(format!(".{}.remote", field.file_name()))
-}
-
-// ---------------------------------------------------------------------------
 // Honest keep_audio (#24) — the storage decision and the cleanup primitives.
 // ---------------------------------------------------------------------------
 
@@ -684,25 +509,11 @@ pub fn keep_awake(setting: Option<&str>) -> bool {
     }
 }
 
-/// Which of a teammate's session assets this device should fetch (#24). The
-/// rule is *device-scoped*: a Mac with `keep_audio` off doesn't download
-/// someone else's recording either, so the setting describes the machine
-/// rather than just its own captures. The timeline comes down either way — it
-/// is text, and the reader needs it.
-pub fn session_download_plan(keep_audio: bool) -> Vec<AssetField> {
-    let mut plan = Vec::new();
-    if keep_audio {
-        plan.push(AssetField::Playback);
-    }
-    plan.push(AssetField::Timeline);
-    plan
-}
-
 /// Every stored audio file under one note's recordings dir: `*.wav` flat in the
 /// dir and in every immediate subdir, sorted for stable output.
 ///
 /// Deliberately a filesystem sweep rather than a walk of
-/// [`resolve_sessions`] × [`AssetField`]. Once a `sessions.json` exists the
+/// [`resolve_sessions`]. Once a `sessions.json` exists the
 /// manifest wins over flat assets and unlisted dirs are invisible to the
 /// reader — but a WAV in one is still a recording of a meeting sitting on
 /// disk. A tombstoned session pulled from the cloud, a stray flat file beside
@@ -838,92 +649,6 @@ pub fn delete_stored_audio(recordings_dir: &Path) -> usize {
         .into_iter()
         .filter(|p| std::fs::remove_file(p).is_ok())
         .count()
-}
-
-/// Metadata for one remote `note_sessions` record, used to reconstruct the
-/// local `sessions.json` manifest on a receiving (teammate) device.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RemoteSessionMeta {
-    /// Session UUID (the record's `client_id`).
-    pub client_id: String,
-    pub index: u32,
-    /// `started_at` epoch-ms (server `started_at`), 0 when unknown.
-    pub started_at_ms: i64,
-    pub duration_ms: u64,
-    pub streams: Vec<String>,
-    /// Tombstone — a deleted record removes the session from the manifest.
-    pub deleted: bool,
-}
-
-/// epoch-ms → RFC3339 (manifest `started_at`). 0 / negative → empty string
-/// (matching how a legacy session with no known start is represented).
-pub fn ms_to_started_at(ms: i64) -> String {
-    if ms <= 0 {
-        return String::new();
-    }
-    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)
-        .map(|dt| dt.to_rfc3339())
-        .unwrap_or_default()
-}
-
-/// Reconcile pulled remote session records into a local manifest.
-///
-///  - Non-deleted remote records become (or overwrite) manifest entries.
-///  - A deleted remote record removes its entry (tombstone honoured).
-///  - Local-only entries not present in `remote` are preserved — a device may
-///    hold a freshly-recorded take that hasn't finished pushing yet, and a
-///    pull mustn't drop it. (The synthesized [`LEGACY_SESSION_ID`] is likewise
-///    preserved.)
-///  - Entries are returned sorted by `index`.
-pub fn reconcile_manifest(
-    existing: Option<SessionsManifest>,
-    remote: &[RemoteSessionMeta],
-) -> SessionsManifest {
-    let mut by_id: std::collections::BTreeMap<String, SessionEntry> = existing
-        .map(|m| m.sessions)
-        .unwrap_or_default()
-        .into_iter()
-        // Sanitize a possibly-tampered on-disk manifest so unsafe ids can never
-        // survive a reconcile and be written back / joined onto a path.
-        .filter(|e| is_safe_session_id(&e.id))
-        .map(|e| (e.id.clone(), e))
-        .collect();
-
-    for r in remote {
-        // A remote `client_id` is server-controlled and becomes both a local
-        // path segment and a persisted manifest id. Never let a hostile one in.
-        if !is_safe_session_id(&r.client_id) {
-            continue;
-        }
-        if r.deleted {
-            by_id.remove(&r.client_id);
-            continue;
-        }
-        // `transcribed` is a *local* fact — whether this device has run this
-        // take's retained audio through a provider (#146) — and the server
-        // carries no field for it. Preserve whatever the local entry said, and
-        // treat a session arriving for the first time as transcribed: its text
-        // came down with the note, and this device holds no audio to replay.
-        let transcribed = by_id.get(&r.client_id).map_or(true, |e| e.transcribed);
-        by_id.insert(
-            r.client_id.clone(),
-            SessionEntry {
-                id: r.client_id.clone(),
-                index: r.index,
-                started_at: ms_to_started_at(r.started_at_ms),
-                duration_ms: r.duration_ms,
-                streams: r.streams.clone(),
-                transcribed,
-            },
-        );
-    }
-
-    let mut sessions: Vec<SessionEntry> = by_id.into_values().collect();
-    sessions.sort_by_key(|e| e.index);
-    SessionsManifest {
-        version: MANIFEST_VERSION,
-        sessions,
-    }
 }
 
 #[cfg(test)]
@@ -1274,174 +999,6 @@ mod tests {
         assert_eq!(sessions[0].0.id, LEGACY_SESSION_ID);
     }
 
-    // ---- cloud sync (#16) pure helpers -----------------------------------
-
-    fn meta(id: &str, index: u32, deleted: bool) -> RemoteSessionMeta {
-        RemoteSessionMeta {
-            client_id: id.into(),
-            index,
-            started_at_ms: 1_719_000_000_000,
-            duration_ms: 5000,
-            streams: vec!["mic".into()],
-            deleted,
-        }
-    }
-
-    #[test]
-    fn ms_to_started_at_formats_and_guards_zero() {
-        // A known epoch-ms formats to a parseable RFC3339 carrying the same instant.
-        let ms = 1_719_921_600_000; // 2024-07-02T12:00:00Z
-        let s = ms_to_started_at(ms);
-        assert!(!s.is_empty());
-        assert_eq!(
-            chrono::DateTime::parse_from_rfc3339(&s).unwrap().timestamp_millis(),
-            ms
-        );
-        // 0 / negative (unknown start) collapses to empty, matching a legacy take.
-        assert_eq!(ms_to_started_at(0), "");
-        assert_eq!(ms_to_started_at(-5), "");
-    }
-
-    #[test]
-    fn upload_plan_uploads_missing_once_and_timeline_always() {
-        use AssetField::*;
-        // First upload: everything present locally, nothing on the server yet.
-        let plan = session_upload_plan(&[Playback, Mic, Sys, Timeline, Chunks], &[]);
-        assert_eq!(plan, vec![Playback, Mic, Sys, Timeline, Chunks]);
-
-        // A later edit: all five already on the server → only timeline re-uploads.
-        let plan = session_upload_plan(
-            &[Playback, Mic, Sys, Timeline, Chunks],
-            &[Playback, Mic, Sys, Timeline, Chunks],
-        );
-        assert_eq!(plan, vec![Timeline]);
-
-        // Playback + timeline present locally, playback already remote → timeline only.
-        let plan = session_upload_plan(&[Playback, Timeline], &[Playback]);
-        assert_eq!(plan, vec![Timeline]);
-
-        // Nothing local → nothing uploaded, even if the server expects it.
-        assert!(session_upload_plan(&[], &[Playback]).is_empty());
-    }
-
-    #[test]
-    fn repair_plan_sends_only_what_the_server_is_missing() {
-        use AssetField::*;
-        // The case this exists for: the metadata record synced but the asset
-        // PATCH never ran, so the server has the session and none of its files.
-        let plan = session_repair_plan(&[Playback, Timeline], &[]);
-        assert_eq!(plan, vec![Playback, Timeline]);
-
-        // Everything already up → a repair pass is free (no re-send of the
-        // timeline, unlike the post-recording plan).
-        assert!(session_repair_plan(&[Playback, Timeline], &[Playback, Timeline]).is_empty());
-
-        // Half-finished upload: only the gap is filled.
-        assert_eq!(session_repair_plan(&[Playback, Timeline], &[Playback]), vec![Timeline]);
-    }
-
-    #[test]
-    fn sync_audio_off_withholds_audio_but_never_the_timeline() {
-        use AssetField::*;
-        let plan = vec![Playback, Mic, Sys, Timeline, Chunks];
-        assert_eq!(retain_syncable(plan.clone(), true), plan);
-        // The regression this guards: `sync_audio = false` used to skip the whole
-        // upload, so teammates got no word timings and therefore no speaker
-        // labels. Audio is withheld; text is not.
-        assert_eq!(retain_syncable(plan, false), vec![Timeline, Chunks]);
-    }
-
-    #[test]
-    fn only_a_changed_timeline_is_re_fetched() {
-        use AssetField::*;
-        // Nothing local yet → fetch whatever the record holds.
-        assert!(should_fetch_asset(Timeline, false, None, "timeline_abc.jsonl"));
-        assert!(should_fetch_asset(Playback, false, None, "playback_abc.wav"));
-
-        // Record holds no file for the field → nothing to fetch.
-        assert!(!should_fetch_asset(Timeline, false, None, ""));
-
-        // Same upload as the copy on disk → skip.
-        assert!(!should_fetch_asset(
-            Timeline,
-            true,
-            Some("timeline_abc.jsonl"),
-            "timeline_abc.jsonl"
-        ));
-        // The author re-diarized / renamed a speaker: PocketBase minted a new
-        // stored filename, so the local copy's labels are stale → re-fetch.
-        assert!(should_fetch_asset(
-            Timeline,
-            true,
-            Some("timeline_abc.jsonl"),
-            "timeline_zzz.jsonl"
-        ));
-        // Downloaded before stamps existed → one redundant fetch, then stamped.
-        assert!(should_fetch_asset(Timeline, true, None, "timeline_abc.jsonl"));
-
-        // Audio is immutable per take and huge — fetched once, never again,
-        // whatever the server's filename says.
-        assert!(!should_fetch_asset(
-            Playback,
-            true,
-            Some("playback_abc.wav"),
-            "playback_zzz.wav"
-        ));
-    }
-
-    #[test]
-    fn reconcile_builds_manifest_sorted_by_index() {
-        let m = reconcile_manifest(None, &[meta("b", 2, false), meta("a", 1, false)]);
-        assert_eq!(m.sessions.len(), 2);
-        assert_eq!(m.sessions[0].id, "a");
-        assert_eq!(m.sessions[1].id, "b");
-        assert!(!m.sessions[0].started_at.is_empty());
-    }
-
-    #[test]
-    fn reconcile_tombstone_removes_entry() {
-        let existing = reconcile_manifest(None, &[meta("a", 1, false), meta("b", 2, false)]);
-        let after = reconcile_manifest(Some(existing), &[meta("a", 1, true)]);
-        assert_eq!(after.sessions.len(), 1);
-        assert_eq!(after.sessions[0].id, "b");
-    }
-
-    #[test]
-    fn reconcile_preserves_local_only_and_legacy_entries() {
-        // A local manifest holds an un-pushed take + a legacy synthesized entry;
-        // a pull carrying an unrelated remote session must keep both locals.
-        let mut existing = SessionsManifest::empty();
-        existing.sessions.push(SessionEntry {
-            id: "local-unpushed".into(),
-            index: 1,
-            started_at: String::new(),
-            duration_ms: 0,
-            streams: vec![],
-            transcribed: true,
-        });
-        let after = reconcile_manifest(Some(existing), &[meta("remote", 2, false)]);
-        let ids: Vec<&str> = after.sessions.iter().map(|e| e.id.as_str()).collect();
-        assert!(ids.contains(&"local-unpushed"));
-        assert!(ids.contains(&"remote"));
-    }
-
-    #[test]
-    fn reconcile_remote_overwrites_matching_local_metadata() {
-        let mut existing = SessionsManifest::empty();
-        existing.sessions.push(SessionEntry {
-            id: "a".into(),
-            index: 1,
-            started_at: String::new(),
-            duration_ms: 0,
-            streams: vec![],
-            transcribed: true,
-        });
-        let after = reconcile_manifest(Some(existing), &[meta("a", 1, false)]);
-        assert_eq!(after.sessions.len(), 1);
-        assert_eq!(after.sessions[0].duration_ms, 5000);
-        assert_eq!(after.sessions[0].streams, vec!["mic"]);
-    }
-
     // ---- session-id path-traversal guard ---------------------------------
 
     #[test]
@@ -1460,37 +1017,6 @@ mod tests {
         assert!(!is_safe_session_id("a\\b"));
         assert!(!is_safe_session_id("has space"));
         assert!(!is_safe_session_id("with.dot")); // dots aren't minted, reject to stay strict
-    }
-
-    #[test]
-    fn reconcile_drops_hostile_remote_client_id() {
-        // A malicious workspace member pushes a session whose client_id would
-        // traverse out of the recordings tree. It must never enter the manifest.
-        let after = reconcile_manifest(
-            None,
-            &[meta("../../../../Desktop", 1, false), meta("safe-uuid", 2, false)],
-        );
-        let ids: Vec<&str> = after.sessions.iter().map(|e| e.id.as_str()).collect();
-        assert_eq!(ids, ["safe-uuid"]);
-        assert!(!ids.iter().any(|id| id.contains("..")));
-    }
-
-    #[test]
-    fn reconcile_sanitizes_tampered_existing_manifest() {
-        // An on-disk manifest tampered with before this fix carries a hostile
-        // id; reconcile must strip it rather than carry it forward.
-        let mut existing = SessionsManifest::empty();
-        existing.sessions.push(SessionEntry {
-            id: "../../evil".into(),
-            index: 1,
-            started_at: String::new(),
-            duration_ms: 0,
-            streams: vec![],
-            transcribed: true,
-        });
-        let after = reconcile_manifest(Some(existing), &[meta("safe", 2, false)]);
-        let ids: Vec<&str> = after.sessions.iter().map(|e| e.id.as_str()).collect();
-        assert_eq!(ids, ["safe"]);
     }
 
     #[test]
@@ -1545,19 +1071,6 @@ mod tests {
     // ---- honest keep_audio (#24) ------------------------------------------
 
     #[test]
-    fn audio_assets_are_the_three_wavs() {
-        let audio: Vec<AssetField> =
-            AssetField::ALL.into_iter().filter(|f| f.is_audio()).collect();
-        assert_eq!(
-            audio,
-            vec![AssetField::Playback, AssetField::Mic, AssetField::Sys]
-        );
-        // The text assets are word timings and chunk timings — never audio.
-        assert!(!AssetField::Timeline.is_audio());
-        assert!(!AssetField::Chunks.is_audio());
-    }
-
-    #[test]
     fn retain_audio_follows_the_setting() {
         assert!(retain_audio(Some("true")));
         assert!(!retain_audio(Some("false")));
@@ -1576,18 +1089,6 @@ mod tests {
         assert!(!keep_awake(Some("false")));
         assert!(keep_awake(Some("")));
         assert!(keep_awake(Some("0")));
-    }
-
-    #[test]
-    fn download_plan_drops_audio_when_not_storing() {
-        // A device that stores audio pulls a teammate's playback + timeline.
-        assert_eq!(
-            session_download_plan(true),
-            vec![AssetField::Playback, AssetField::Timeline]
-        );
-        // A device with keep_audio off pulls only the text timeline, so the
-        // reader and session dividers still work with no WAV on disk.
-        assert_eq!(session_download_plan(false), vec![AssetField::Timeline]);
     }
 
     #[test]
@@ -1866,33 +1367,6 @@ mod tests {
         touch(&rec.join("playback.wav"));
         assert!(!record_transcribed_take(&rec, LEGACY_SESSION_ID).unwrap());
         assert!(read_manifest(&rec).is_none());
-    }
-
-    #[test]
-    fn reconcile_keeps_a_local_takes_untranscribed_flag() {
-        // The server has no field for it, so a cloud pull that rewrites the
-        // entry must not silently declare the take transcribed — the audio
-        // would stay on disk with no way left to ask for its text.
-        let mut existing = SessionsManifest::empty();
-        existing.sessions.push(SessionEntry {
-            id: "a".into(),
-            index: 1,
-            started_at: String::new(),
-            duration_ms: 0,
-            streams: vec![],
-            transcribed: false,
-        });
-        let after = reconcile_manifest(Some(existing), &[meta("a", 1, false)]);
-        assert_eq!(after.sessions.len(), 1);
-        assert!(!after.sessions[0].transcribed);
-    }
-
-    #[test]
-    fn reconcile_treats_a_newly_arriving_remote_session_as_transcribed() {
-        // A teammate's take: its text arrived with the note, and this device
-        // has no audio to replay even if it wanted to.
-        let after = reconcile_manifest(None, &[meta("remote", 1, false)]);
-        assert!(after.sessions[0].transcribed);
     }
 
     #[test]

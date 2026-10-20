@@ -5,7 +5,6 @@ import { useNotesStore } from "../lib/store";
 import { indexById, matchesFilter, NO_FILTER, type NoteFilter } from "../lib/noteList";
 import { NoteCard } from "../components/NoteCard";
 import { NoteFilters } from "../components/NoteFilters";
-import { useCloudStore } from "../lib/cloud";
 
 export function Folder() {
   const { id } = useParams<{ id: string }>();
@@ -14,7 +13,6 @@ export function Folder() {
   const notes = useNotesStore((s) => s.notes);
   const clients = useNotesStore((s) => s.clients);
   const recorded = useNotesStore((s) => s.recordedNoteIds);
-  const myId = useCloudStore((s) => s.status.user?.id ?? null);
   const [filter, setFilter] = useState<NoteFilter>(NO_FILTER);
 
   // A filter narrowing one folder says nothing about the next one, and carried
@@ -33,9 +31,9 @@ export function Folder() {
   const filtered = useMemo(
     () =>
       folderNotes.filter((n) =>
-        matchesFilter(n, filter, { recorded: recorded.has(n.id), myId }),
+        matchesFilter(n, filter, { recorded: recorded.has(n.id) }),
       ),
-    [folderNotes, filter, recorded, myId],
+    [folderNotes, filter, recorded],
   );
 
   if (!folder) {

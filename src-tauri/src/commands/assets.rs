@@ -160,10 +160,7 @@ pub fn delete_stored_audio(app: AppHandle) -> Result<usize, String> {
     let mut removed = 0;
     for note_id in &totals.note_ids {
         let n = crate::sessions::delete_stored_audio(&root.join(note_id));
-        if n > 0 {
-            removed += n;
-            super::note_changed_for_sync(&app, note_id);
-        }
+        removed += n;
     }
     Ok(removed)
 }

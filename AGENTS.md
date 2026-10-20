@@ -1,6 +1,6 @@
 # Humla — agent guide
 
-Humla is a personal macOS meeting-notes app (Tauri 2 + React 19 + Rust + two Swift sidecars). It records mic and system audio as two separate streams, transcribes them, diarizes after stop, and summarizes your typed notes together with the transcript. Data stays local in SQLite and secrets go in the Keychain. There is no backend apart from the optional humla-cloud sync.
+Humla is a personal macOS meeting-notes app (Tauri 2 + React 19 + Rust + two Swift sidecars). It records mic and system audio as two separate streams, transcribes them, diarizes after stop, and summarizes your typed notes together with the transcript. Data stays local in SQLite and secrets go in the Keychain. There is no backend.
 
 This file is the map. **`CLAUDE.md` is the full reference**: the reasoning behind every rule below, the data flow during a recording, the sidecars, signing and releases. Read the section of it that covers the area you are changing before you change it.
 
@@ -41,16 +41,15 @@ src-tauri/                Rust backend (crate `humla`, Rust 1.85)
   src/commands.rs         recording lifecycle, transcribe_chunk, diarize-on-stop,
                           replay/transcribe_note, timelines
   src/commands/           other #[tauri::command] groups (notes, folders, settings, summary,
-                          title, chat, cloud*, export, mcp, webhook, models, …)
+                          title, chat, export, mcp, webhook, models, …)
   src/stt/                BatchSttAdapter + OpenAI / Local / Deepgram / Groq
-  src/chat/               agentic chat over notes (tools, providers, cloud)
+  src/chat/               agentic chat over notes (tools, providers)
   src/mcp/ + bin/humla-mcp.rs   read-only MCP server binary
   src/db.rs               schema, CRUD, migrations
   src/recording.rs        LiveCapture, CaptureSink, Phase, Step
   src/diarize.rs, echo.rs diarize sidecar wrapper + engine choice; echo removal
   src/sessions.rs         takes/manifest, keep_audio + transcribe-manually rules
   src/openai.rs, anthropic.rs, providers.rs, keychain.rs, local_whisper.rs, …
-  crates/cloud-sync/      sync engine (workspace member)
   crates/echo-probe/      echo lag/cancel library + measurement CLI
 audio-capture/            Swift sidecar: AVAudioEngine mic + ScreenCaptureKit system audio
 speaker-diarize/          Swift sidecar: FluidAudio diarization (pinned 0.17.4), `swift test`
@@ -76,8 +75,9 @@ On a fresh clone `src-tauri/binaries/` doesn't exist. `tauri-build` fails when a
 
 ## Git and pull requests
 
-- This checkout is the fork `Feikovandijk/humla` (`origin`). **Open every PR against the fork's `main`** (`gh pr create --repo Feikovandijk/humla --base main`). Never open one against the upstream `michaelwilhelmsen/humla`.
-- Branch off `main`; don't commit to it directly.
+- This checkout is the fork `Feikovandijk/humla` (`origin`). **Open every PR against the fork's `dev`** (`gh pr create --repo Feikovandijk/humla --base dev`). `main` is for releases only. Never open a PR against the upstream `michaelwilhelmsen/humla`.
+- Branch off `dev`; don't commit to `dev` or `main` directly.
+- Never put sensitive data in a PR (title, body, commits or diff): no API keys, tokens, credentials, signing or notarisation details, personal data, or meeting content.
 
 ## Rules that are easy to break
 
@@ -94,7 +94,7 @@ On a fresh clone `src-tauri/binaries/` doesn't exist. `tauri-build` fails when a
   - `Engine::label` ↔ `DIARIZE_ENGINE_LABEL`
 - **The timeline is canonical (ADR-0004).** On a note that has a timeline, `note.transcript` is a projection of it. Edit through `note_timeline_*` and never write the transcript string directly.
 - **Only the live capture's post-stop chain writes `recording_status`.** Other work reports through `ChainProgress` (`Rediarize` / `Replay` / `Silent`).
-- **Derived local columns never bump `updated_at`** (`speakers`, `detected_language`). `updated_at` is cloud-sync's last-write-wins key.
+- **Derived local columns never bump `updated_at`** (`speakers`, `detected_language`). `updated_at` drives the activity-sorted lists.
 - **Async/Tauri pitfalls:**
   - Never hold a `parking_lot` guard across `.await`.
   - Use `tauri::async_runtime::spawn`, not `tokio::spawn`, from `setup`.

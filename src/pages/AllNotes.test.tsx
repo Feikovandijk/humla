@@ -6,7 +6,6 @@ import { AllNotes } from "./AllNotes";
 import { LocationProbe } from "../test/app";
 import { mockTauri } from "../test/tauri";
 import { useNotesStore, useRecordingStore } from "../lib/store";
-import { useCloudStore } from "../lib/cloud";
 import type { Folder, Note } from "../lib/ipc";
 
 // Notes all created "now" so they land in the same "Today" group and render in
@@ -27,9 +26,6 @@ function makeNote(id: string, title: string): Note {
     detected_language: null,
     created_at: Date.now(),
     updated_at: Date.now(),
-    owner: "",
-    workspace_id: "",
-    private: false,
   };
 }
 
@@ -416,26 +412,6 @@ describe("AllNotes activity", () => {
   });
 });
 
-// #191 — a private note says so on its card, and only inside a workspace: every
-// Personal note is private, so the glyph there would appear on every card and
-// distinguish nothing.
-describe("a private note's card", () => {
-  it("carries a lock in a workspace and nothing on Personal", async () => {
-    mockTauri();
-    seed([
-      { ...makeNote("n1", "Alpha"), workspace_id: "ws1", private: true },
-      { ...makeNote("n2", "Beta"), workspace_id: "ws1" },
-      { ...makeNote("n3", "Gamma"), private: true },
-    ]);
-    renderAll();
-
-    const card = (title: string) => screen.getByRole("link", { name: new RegExp(title) });
-    expect(card("Alpha").textContent).toContain("Private");
-    expect(card("Beta").textContent).not.toContain("Private");
-    expect(card("Gamma").textContent).not.toContain("Private");
-  });
-});
-
 describe("AllNotes filters", () => {
   // Each picker is a menu: open the trigger by its accessible name, pick a row.
   async function pick(control: string, option: string) {
@@ -498,35 +474,6 @@ describe("AllNotes filters", () => {
     await pick("Client", "No client");
     expect(titles().join(" ")).toContain("Beta");
     expect(titles().join(" ")).not.toContain("Alpha");
-  });
-
-  // Personal has one author, so an owner picker there offers a single name
-  // that changes nothing.
-  it("offers the owner axis only in a workspace with more than one member", async () => {
-    mockTauri();
-    seed([makeNote("n1", "Alpha")]);
-    renderAll();
-    expect(screen.queryByRole("button", { name: "Created by" })).toBeNull();
-  });
-
-  it("counts an unsynced note as the signed-in user's own", async () => {
-    mockTauri();
-    useCloudStore.setState({
-      members: {
-        "u-me": { id: "u-me", email: "me@x", name: "Me", role: "owner" },
-        "u-anna": { id: "u-anna", email: "anna@x", name: "Anna", role: "member" },
-      },
-      status: { ...useCloudStore.getState().status, user: { id: "u-me", email: "me@x", name: "Me", verified: true } },
-    });
-    seed([
-      { ...makeNote("n1", "Alpha"), owner: "" },
-      { ...makeNote("n2", "Beta"), owner: "u-anna" },
-    ]);
-    renderAll();
-
-    await pick("Created by", "Me");
-    expect(titles().join(" ")).toContain("Alpha");
-    expect(titles().join(" ")).not.toContain("Beta");
   });
 
   it("keeps the folder axis to the notes filed nowhere", async () => {

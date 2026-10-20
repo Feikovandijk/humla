@@ -41,7 +41,6 @@ export function mockTauri(
       case "notes_with_recordings":
       case "note_timeline":
       case "speaker_label_stats":
-      case "cloud_speaker_roster":
         return [];
       case "recording_state":
         return "idle";
@@ -55,21 +54,10 @@ export function mockTauri(
         return { notes: 0, files: 0, bytes: 0, noteIds: [] };
       case "chat_get_breadth":
         return "note";
-      case "chat_get_owner_filter":
       case "chat_get_pin":
         return "";
       case "permissions_status":
         return { microphone: "granted", screen: "granted" };
-      case "cloud_status":
-        return {
-          configured: false,
-          logged_in: false,
-          base_url: "",
-          user: null,
-          current_workspace: null,
-          workspaces: [],
-          billing_enabled: false,
-        };
       case "provider_key_get":
         return null;
       case "webhook_get_endpoint":

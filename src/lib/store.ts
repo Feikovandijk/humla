@@ -1,6 +1,5 @@
 import { create } from "zustand";
-import { ipc, onRecordingDiagnostic, onRecordingError, onRecordingStatus, onSummary, onSummaryStatus, onTitleStatus, onTranscribeStatus, onDiarizeStatus, onTranscript, onTranscriptReplaced, onNotesChanged, onSyncStatus, onSyncConflict, onLocalWhisperProgress, onLocalWhisperDownloadError, onParakeetProgress, onParakeetDownloadError, type Client, type Folder, type Note, type RecordingDiagnostic, type RecordingStatus, type Step } from "./ipc";
-import { useCloudStore } from "./cloud";
+import { ipc, onRecordingDiagnostic, onRecordingError, onRecordingStatus, onSummary, onSummaryStatus, onTitleStatus, onTranscribeStatus, onDiarizeStatus, onTranscript, onTranscriptReplaced, onNotesChanged, onLocalWhisperProgress, onLocalWhisperDownloadError, onParakeetProgress, onParakeetDownloadError, type Client, type Folder, type Note, type RecordingDiagnostic, type RecordingStatus, type Step } from "./ipc";
 
 type NotesState = {
   notes: Note[];
@@ -361,20 +360,12 @@ export const useDownloadStore = create<DownloadState>((set) => ({
 const MIC_AUDIBLE_PEAK = 0.001;
 
 let listenersBound = false;
-// The note id of the in-flight recording, captured so we can upload its audio
-// once it finishes (the idle status itself doesn't carry the note id).
-let recordingNoteId: string | null = null;
 // The note id of an in-flight *import* (distinct from a live recording), so that
 // when it finishes we can tell the user if the file yielded no transcript.
 let importingNoteId: string | null = null;
 export function bindBackendListeners() {
   if (listenersBound) return;
   listenersBound = true;
-  // Re-check cloud status when the window regains focus — picks up subscription
-  // changes after the user completes Stripe checkout/portal in their browser.
-  window.addEventListener("focus", () => {
-    void useCloudStore.getState().refresh();
-  });
   onTranscript(({ noteId, text }) => useNotesStore.getState().appendTranscript(noteId, text));
   onTranscriptReplaced(({ noteId, text }) => useNotesStore.getState().replaceTranscript(noteId, text));
   onSummary(({ noteId, summary }) => useNotesStore.getState().setSummary(noteId, summary));
@@ -390,20 +381,6 @@ export function bindBackendListeners() {
       // may be the ones on screen — the tray and the compact indicator both
       // stop a capture from outside a note.
       void useNotesStore.getState().refreshRecorded();
-      // A recording just finished — if it was a shared (workspace) note, upload
-      // its audio for teammates. The command waits for the post-stop pipeline to
-      // write playback.wav, so fire-and-forget here.
-      if (recordingNoteId) {
-        const id = recordingNoteId;
-        recordingNoteId = null;
-        const note = useNotesStore.getState().notes.find((n) => n.id === id);
-        if (note?.workspace_id) {
-          // notes.audio keeps the latest take playable for old clients;
-          // uploadNoteSessions pushes every take's per-session assets (#16).
-          void ipc.uploadNoteAudio(id);
-          void ipc.uploadNoteSessions(id);
-        }
-      }
       // An import just finished. The transcript is written (via
       // transcript_replaced) before this idle event, so if it's still empty the
       // file had no detectable speech — say so instead of leaving a blank note
@@ -420,8 +397,6 @@ export function bindBackendListeners() {
       }
     } else if (s.phase === "importing") {
       if (s.noteId) importingNoteId = s.noteId;
-    } else if (s.noteId) {
-      recordingNoteId = s.noteId; // an active recording — remember which note
     }
   });
   onTitleStatus(({ noteId, active }) => {
@@ -452,23 +427,8 @@ export function bindBackendListeners() {
       useRecordingStore.setState({ micHeard: true });
     }
   });
-  // Cloud sync applied remote changes → refetch notes + folders.
+  // A backend write the UI didn't ask for → refetch notes + folders.
   onNotesChanged(() => useNotesStore.getState().refresh());
-  // Live sync state → sidebar indicator. Also refresh the per-note pending set,
-  // since a syncing→idle transition brackets the outbox drain.
-  onSyncStatus((s) => {
-    useCloudStore.getState().setSyncStatus(s);
-    void useCloudStore.getState().refreshPending();
-    // Both are the account's state changing under the UI: the status says how.
-    if (s === "signed_out" || s === "two_factor_required") void useCloudStore.getState().refresh();
-  });
-  // A sync conflict preserved local edits as a copy → tell the user where it went.
-  onSyncConflict((title) =>
-    useRecordingStore.getState().pushError({
-      noteId: null,
-      message: `"${title}" changed on the server — your unsynced edits were saved as a "(conflict copy)" note.`,
-    }),
-  );
   // Global whisper-download tracking (WP-E). Feeds the sidebar nag chip + the
   // "You're all set" recap so a model download that finishes AFTER the user
   // leaves the wizard still clears the nag. On the final event (received >=
@@ -511,29 +471,5 @@ export function bindBackendListeners() {
       noteId: null,
       message: `Parakeet model download failed: ${message}`,
     });
-  });
-  // "Added to a workspace" notification. Watch the cloud status for workspaces
-  // that newly appear and that you didn't create (role !== owner) — i.e. an
-  // admin added you — and flash it, since otherwise it's silent.
-  let knownWorkspaceIds: Set<string> | null = null;
-  let knownUserId: string | null = null;
-  useCloudStore.subscribe((s) => {
-    if (!s.ready) return;
-    const uid = s.status.user?.id ?? null;
-    const ids = new Set(s.status.workspaces.map((w) => w.id));
-    // Re-baseline (no flash) on the first snapshot AND whenever the signed-in
-    // user changes (login / logout / account switch) — otherwise the next
-    // session's workspaces would all spuriously flash "Added to…".
-    if (knownWorkspaceIds === null || uid !== knownUserId) {
-      knownUserId = uid;
-      knownWorkspaceIds = ids;
-      return;
-    }
-    for (const w of s.status.workspaces) {
-      if (!knownWorkspaceIds.has(w.id) && w.role !== "owner") {
-        useRecordingStore.getState().pushFlash(`Added to "${w.name}"`);
-      }
-    }
-    knownWorkspaceIds = ids;
   });
 }

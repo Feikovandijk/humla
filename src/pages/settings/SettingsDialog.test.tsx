@@ -375,7 +375,7 @@ describe("settings dialog", () => {
     expect(within(dialog).queryByRole("searchbox")).not.toBeInTheDocument();
   });
 
-  it("shows the six sections in the sidebar nav", async () => {
+  it("shows the five sections in the sidebar nav", async () => {
     renderApp("/settings");
     const dialog = await screen.findByRole("dialog", { name: /settings/i });
 
@@ -387,7 +387,6 @@ describe("settings dialog", () => {
       "Transcription",
       "Summaries",
       "Chat",
-      "Account",
       "General",
     ]);
   });
@@ -729,18 +728,12 @@ describe("settings dialog", () => {
     expect(writes.local_llm_model).toBe("qwen3:8b");
   });
 
-  it("deep-links ?tab=account to the merged Account section", async () => {
+  it("sends an old ?tab=account link to General", async () => {
     renderApp("/settings?tab=account");
     const dialog = await screen.findByRole("dialog", { name: /settings/i });
     expect(
-      within(dialog).getByRole("tab", { name: "Account" }),
+      within(dialog).getByRole("tab", { name: "General" }),
     ).toHaveAttribute("aria-selected", "true");
-    // Signed out: the merged section is just the connect surface — workspace
-    // management appears in the same section once signed in (covered in
-    // AccountSection.test.tsx).
-    expect(
-      await within(dialog).findByRole("heading", { name: /connect to sync/i }),
-    ).toBeInTheDocument();
   });
 
   it("switches sections from the nav and reflects it in the URL", async () => {

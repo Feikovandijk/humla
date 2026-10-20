@@ -5,7 +5,6 @@ import { MemoryRouter } from "react-router-dom";
 import { ChatPanel, type ChatSessionControls } from "./ChatPanel";
 import { mockTauri } from "../test/tauri";
 import type { ChatMessageDto, Folder, Note } from "../lib/ipc";
-import { useCloudStore, DISCONNECTED, type CloudRole } from "../lib/cloud";
 import { useNotesStore } from "../lib/store";
 
 // These tests exercise the panel on a cloud provider, the app default before
@@ -16,56 +15,12 @@ vi.mock("../pages/settings/types", async (importOriginal) => {
   return { ...mod, DEFAULTS: { ...mod.DEFAULTS, chat_provider: "openai" } };
 });
 
-// Signed into a MANAGED (billing-enabled) workspace with the given role, so the
-// BYOK activation pane (#76) applies. The roster's owner is "Ada" for
-// member-facing "ask {owner}" copy.
-function signInBillingWorkspace(role: CloudRole = "owner") {
-  const ws = { id: "ws1", name: "Acme Team", role, plan_status: "active" as const };
-  useCloudStore.setState({
-    status: {
-      ...DISCONNECTED,
-      configured: true,
-      logged_in: true,
-      base_url: "https://sync.humla.team",
-      current_workspace: ws,
-      workspaces: [ws],
-      billing_enabled: true,
-    },
-    members: { u1: { id: "u1", name: "Ada", email: "ada@acme.com", role: "owner" } },
-  });
-}
-
-const UNCONFIGURED_KEY = { configured: false, last4: null, setBy: null, setAt: null, keyHealth: null };
-const CONFIGURED_KEY = {
-  configured: true,
-  last4: "n3Kq",
-  setBy: "u1",
-  setAt: null,
-  keyHealth: "ok",
-};
-
 // A minimal note carrying a folder, so the composer breadth picker's
 // "Folder: {name}" option appears (#63). Only the fields ChatPanel reads matter.
 function seedNoteWithFolder(noteId = "n1", folderName = "Roadmap") {
   const note = { id: noteId, folder_id: "f1" } as unknown as Note;
   const folder = { id: "f1", name: folderName } as unknown as Folder;
   useNotesStore.setState({ notes: [note], folders: [folder] });
-}
-
-// Populate the cloud store as if signed into a workspace, so the Teams tenant
-// row appears (issue #50).
-function signIntoWorkspace(name = "Acme Team") {
-  const ws = { id: "ws1", name, role: "owner" as const, plan_status: "active" as const };
-  useCloudStore.setState({
-    status: {
-      ...DISCONNECTED,
-      configured: true,
-      logged_in: true,
-      base_url: "https://sync.humla.team",
-      current_workspace: ws,
-      workspaces: [ws],
-    },
-  });
 }
 
 function userMsg(text: string): ChatMessageDto {
@@ -160,8 +115,6 @@ function renderGlobalWithControls() {
 
 beforeEach(() => {
   mockTauri();
-  // Default: signed out, so Personal is the only tenant unless a test opts in.
-  useCloudStore.setState({ status: DISCONNECTED });
   // No note/folder seeded by default (breadth picker shows no folder option).
   useNotesStore.setState({ notes: [], folders: [] });
 });
@@ -250,27 +203,6 @@ describe("ChatPanel retrieval UI (#47)", () => {
 });
 
 describe("ChatPanel context pinning (#58)", () => {
-  it("renders no tenant picker — chat is pinned to the loaded context", async () => {
-    mockTauri({ provider_key_get: () => "sk-test", chat_history: () => history() });
-    signIntoWorkspace("Acme Team");
-    renderPanel();
-    await screen.findByPlaceholderText(/Ask about your notes/);
-    // The old Personal/Workspace selector is gone entirely.
-    expect(screen.queryByRole("button", { name: "Chat tenant" })).toBeNull();
-  });
-
-  it("shows the workspace context line in a workspace (#63)", async () => {
-    mockTauri({ provider_key_get: () => "sk-test", chat_history: () => history() });
-    signIntoWorkspace("Acme Team");
-    renderPanel();
-    // A muted line above the thread, exact copy per the ticket.
-    const line = await screen.findByText("Chatting in Acme Team · visible to members");
-    expect(line).toBeInTheDocument();
-    // It owns its vertical space with a bottom hairline so scrolled message
-    // content passes beneath a proper boundary rather than colliding with it.
-    expect(line.className).toContain("border-b");
-  });
-
   it("renders no context line in personal (signed out) (#63)", async () => {
     mockTauri({ provider_key_get: () => "sk-test", chat_history: () => history() });
     renderPanel();
@@ -529,20 +461,14 @@ describe("ChatPanel sessions (#62)", () => {
       expect(controls.current?.activeConversationId).toBeNull();
     });
 
-    it("does not persist a breadth or pin chosen before the first turn", async () => {
-      // The trap this replaces: writing them lazily created a row the list hid but
-      // the next send resolved to, so the chip could read "off" while the stored
-      // row narrowed the turn anyway (#103).
+    it("does not persist a breadth chosen before the first turn", async () => {
+      // The trap this replaces: writing it lazily created a row the list hid but
+      // the next send resolved to (#103).
       let breadthWrites = 0;
-      let pinWrites = 0;
       mockTauri({
         ...aFinishedThread,
         chat_set_breadth: () => {
           breadthWrites += 1;
-          return null;
-        },
-        chat_set_owner_filter: () => {
-          pinWrites += 1;
           return null;
         },
       });
@@ -550,7 +476,6 @@ describe("ChatPanel sessions (#62)", () => {
       await screen.findByPlaceholderText(/Ask about your notes/);
 
       expect(breadthWrites).toBe(0);
-      expect(pinWrites).toBe(0);
     });
 
     it("carries the draft's breadth into the turn that creates the conversation", async () => {
@@ -573,7 +498,7 @@ describe("ChatPanel sessions (#62)", () => {
       expect(sent!.conversationId).toBeNull();
       expect(sent!.draftBreadth).toBe("all");
       // ...and an absent pin is null, not "" — "" would read as a pin on nobody.
-      expect(sent!.draftOwnerFilter).toBeNull();
+      expect(sent!.draftClientFilter).toBeNull();
     });
 
     it("stops sending draft settings once a conversation exists", async () => {
@@ -1321,155 +1246,6 @@ describe("ChatPanel composer breadth + chrome (#63)", () => {
   });
 });
 
-describe("ChatPanel turn allowance (#69)", () => {
-  it("shows the workspace turn allowance bottom-right of the composer", async () => {
-    mockTauri({
-      provider_key_get: () => "sk-test",
-      chat_history: () => history(),
-      chat_usage: () => ({ used: 2, cap: 3, periodEnd: 0 }),
-    });
-    signIntoWorkspace("Acme Team");
-    renderPanel();
-    expect(await screen.findByText("2/3 turns")).toBeInTheDocument();
-  });
-
-  it("renders no allowance in personal context", async () => {
-    mockTauri({
-      provider_key_get: () => "sk-test",
-      chat_history: () => history(),
-      // Even if the backend returned a reading, personal must never show it.
-      chat_usage: () => ({ used: 2, cap: 3, periodEnd: 0 }),
-    });
-    renderPanel();
-    await screen.findByPlaceholderText(/ask about your notes/i);
-    expect(screen.queryByText(/turns/)).toBeNull();
-  });
-
-  it("hides the allowance when the backend returns null (unmetered / unavailable)", async () => {
-    mockTauri({
-      provider_key_get: () => "sk-test",
-      chat_history: () => history(),
-      chat_usage: () => null,
-    });
-    signIntoWorkspace("Acme Team");
-    renderPanel();
-    await screen.findByPlaceholderText(/ask about your notes/i);
-    expect(screen.queryByText(/turns/)).toBeNull();
-  });
-
-  it("refreshes the allowance after a completed send", async () => {
-    let sent = false;
-    mockTauri({
-      provider_key_get: () => "sk-test",
-      chat_send: () => {
-        sent = true;
-        return { conversationId: "c1", truncated: false };
-      },
-      chat_history: () => history(sent ? [userMsg("q"), assistantMsg("a")] : []),
-      // Allowance consumed by the completed turn: 2/3 before, 3/3 after.
-      chat_usage: () => ({ used: sent ? 3 : 2, cap: 3, periodEnd: 0 }),
-    });
-    signIntoWorkspace("Acme Team");
-    renderPanel();
-    expect(await screen.findByText("2/3 turns")).toBeInTheDocument();
-    const input = await screen.findByRole("textbox", { name: /ask about your notes/i });
-    fireEvent.change(input, { target: { value: "q" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await waitFor(() => expect(screen.getByText("3/3 turns")).toBeInTheDocument());
-  });
-
-  it("clears the old workspace's meter on a workspace switch until the new fetch resolves", async () => {
-    let releaseB: (() => void) | null = null;
-    let phase: "A" | "B" = "A";
-    mockTauri({
-      provider_key_get: () => "sk-test",
-      chat_history: () => history(),
-      chat_usage: () =>
-        phase === "A"
-          ? { used: 2, cap: 3, periodEnd: 0 }
-          : new Promise((resolve) => {
-              releaseB = () => resolve({ used: 1, cap: 9, periodEnd: 0 });
-            }),
-    });
-    signIntoWorkspace("Acme Team");
-    renderPanel();
-    expect(await screen.findByText("2/3 turns")).toBeInTheDocument();
-
-    // Switch to a different workspace whose usage fetch is still pending.
-    phase = "B";
-    act(() => {
-      const ws = { id: "ws2", name: "Beta Team", role: "owner" as const, plan_status: "active" as const };
-      useCloudStore.setState({
-        status: {
-          ...DISCONNECTED,
-          configured: true,
-          logged_in: true,
-          base_url: "https://sync.humla.team",
-          current_workspace: ws,
-          workspaces: [ws],
-        },
-      });
-    });
-    // The old workspace's numbers must not linger while B's fetch is pending.
-    await waitFor(() => expect(screen.queryByText("2/3 turns")).toBeNull());
-    expect(screen.queryByText(/turns/)).toBeNull();
-
-    // Once B resolves, its own numbers appear.
-    await act(async () => {
-      releaseB?.();
-      await Promise.resolve();
-    });
-    expect(await screen.findByText("1/9 turns")).toBeInTheDocument();
-  });
-
-  it("hides the meter when the usage fetch throws", async () => {
-    mockTauri({
-      provider_key_get: () => "sk-test",
-      chat_history: () => history(),
-      chat_usage: () => {
-        throw new Error("usage boom");
-      },
-    });
-    signIntoWorkspace("Acme Team");
-    renderPanel();
-    await screen.findByPlaceholderText(/ask about your notes/i);
-    expect(screen.queryByText(/turns/)).toBeNull();
-  });
-
-  it("keeps the meter value after a failed send (a failed turn consumes nothing)", async () => {
-    mockTauri({
-      provider_key_get: () => "sk-test",
-      chat_history: () => history(),
-      chat_send: () => {
-        throw new Error("send failed");
-      },
-      // The server value is unchanged by a failed turn; #76 re-detects activation
-      // in the catch (which reads usage), but the displayed number stays 2/3.
-      chat_usage: () => ({ used: 2, cap: 3, periodEnd: 0 }),
-    });
-    signIntoWorkspace("Acme Team");
-    renderPanel();
-    expect(await screen.findByText("2/3 turns")).toBeInTheDocument();
-    const input = await screen.findByRole("textbox", { name: /ask about your notes/i });
-    fireEvent.change(input, { target: { value: "q" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await screen.findByText(/send failed/);
-    expect(screen.getByText("2/3 turns")).toBeInTheDocument();
-  });
-
-  it("colours the meter with the danger tone at the cap (#69)", async () => {
-    mockTauri({
-      provider_key_get: () => "sk-test",
-      chat_history: () => history(),
-      chat_usage: () => ({ used: 3, cap: 3, periodEnd: 0 }),
-    });
-    signIntoWorkspace("Acme Team");
-    renderPanel();
-    const meter = await screen.findByText("3/3 turns");
-    expect(meter.className).toContain("text-[var(--color-status-danger)]");
-  });
-});
-
 describe("ChatPanel breadth icons (#69)", () => {
   it("shows the active scope's icon on the breadth trigger", async () => {
     mockTauri({
@@ -1482,129 +1258,6 @@ describe("ChatPanel breadth icons (#69)", () => {
     await waitFor(() => expect(trigger).toHaveTextContent("All notes"));
     // "All notes" → the Files glyph (distinct from FileText / ChevronDown).
     expect(trigger.querySelector(".lucide-files")).not.toBeNull();
-  });
-});
-
-describe("ChatPanel workspace activation (#76)", () => {
-  it("owner sees the activation pane with key entry when not activated", async () => {
-    mockTauri({
-      chat_history: () => history(),
-      chat_key_meta: () => UNCONFIGURED_KEY,
-      chat_usage: () => null,
-    });
-    signInBillingWorkspace("owner");
-    renderPanel();
-    // Values-first line respecting the claim boundary ("your OpenAI relationship").
-    expect(await screen.findByText(/your OpenAI relationship/)).toBeInTheDocument();
-    expect(screen.getByLabelText("OpenAI API key")).toBeInTheDocument();
-    // The composer is replaced by the activation state.
-    expect(screen.queryByPlaceholderText(/Ask about your notes/)).toBeNull();
-  });
-
-  it("member sees an ask-owner message with nothing actionable", async () => {
-    mockTauri({
-      chat_history: () => history(),
-      chat_key_meta: () => UNCONFIGURED_KEY,
-      chat_usage: () => null,
-    });
-    signInBillingWorkspace("member");
-    renderPanel();
-    expect(await screen.findByText(/ask Ada/)).toBeInTheDocument();
-    expect(screen.queryByLabelText("OpenAI API key")).toBeNull();
-    expect(screen.queryByPlaceholderText(/Ask about your notes/)).toBeNull();
-  });
-
-  it("flips to the composer after the owner activates, without a reload", async () => {
-    mockTauri({
-      chat_history: () => history(),
-      chat_key_meta: () => UNCONFIGURED_KEY,
-      chat_usage: () => null,
-      chat_key_set: () => CONFIGURED_KEY,
-    });
-    signInBillingWorkspace("owner");
-    renderPanel();
-    const input = await screen.findByLabelText("OpenAI API key");
-    fireEvent.change(input, { target: { value: "sk-abc" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    // Composer appears in place (same instance — no reload); entry gone.
-    expect(await screen.findByPlaceholderText(/Ask about your notes/)).toBeInTheDocument();
-    expect(screen.queryByLabelText("OpenAI API key")).toBeNull();
-  });
-
-  it("keeps history readable while unactivated", async () => {
-    mockTauri({
-      chat_history: () => history([userMsg("earlier q"), assistantMsg("earlier a")]),
-      chat_key_meta: () => UNCONFIGURED_KEY,
-      chat_usage: () => null,
-    });
-    signInBillingWorkspace("member");
-    renderPanel();
-    // Past conversation renders even though chat isn't activated…
-    expect(await screen.findByText("earlier a")).toBeInTheDocument();
-    expect(screen.getByText("earlier q")).toBeInTheDocument();
-    // …and the activation state shows instead of the composer.
-    expect(screen.getByText(/ask Ada/)).toBeInTheDocument();
-  });
-
-  it("shows the composer (not the pane) when the workspace key is configured", async () => {
-    mockTauri({
-      chat_history: () => history(),
-      chat_key_meta: () => CONFIGURED_KEY,
-      chat_usage: () => null,
-    });
-    signInBillingWorkspace("owner");
-    renderPanel();
-    expect(await screen.findByPlaceholderText(/Ask about your notes/)).toBeInTheDocument();
-    expect(screen.queryByLabelText("OpenAI API key")).toBeNull();
-  });
-
-  it("never shows the activation pane on a self-host server (billing disabled)", async () => {
-    mockTauri({
-      provider_key_get: () => "sk-test",
-      chat_history: () => history(),
-      chat_key_meta: () => UNCONFIGURED_KEY,
-      chat_usage: () => null,
-    });
-    signIntoWorkspace("Acme Team"); // billing_enabled false → self-host posture
-    renderPanel();
-    expect(await screen.findByPlaceholderText(/Ask about your notes/)).toBeInTheDocument();
-    expect(screen.queryByText(/your OpenAI relationship/)).toBeNull();
-  });
-
-  it("lets a member without a personal key send in an activated workspace", async () => {
-    let sent = false;
-    mockTauri({
-      provider_key_get: () => null, // no personal key → personal readiness is false
-      chat_history: () => history(sent ? [userMsg("q"), assistantMsg("a")] : []),
-      chat_key_meta: () => CONFIGURED_KEY, // workspace is activated
-      chat_usage: () => null,
-      chat_send: () => {
-        sent = true;
-        return { conversationId: "c1", truncated: false };
-      },
-    });
-    signInBillingWorkspace("member");
-    renderPanel();
-    const input = await screen.findByPlaceholderText(/Ask about your notes/);
-    fireEvent.change(input, { target: { value: "q" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    // The send must reach the backend — the workspace runs on the workspace key,
-    // not the member's (absent) personal key.
-    await waitFor(() => expect(sent).toBe(true));
-  });
-
-  it("lets a workspace member without a personal key reach the pane (no personal setup prompt)", async () => {
-    mockTauri({
-      provider_key_get: () => null,
-      chat_history: () => history(),
-      chat_key_meta: () => UNCONFIGURED_KEY,
-      chat_usage: () => null,
-    });
-    signInBillingWorkspace("member");
-    renderPanel();
-    expect(await screen.findByText(/ask Ada/)).toBeInTheDocument();
-    // NOT the personal "Add your OpenAI key" setup prompt.
-    expect(screen.queryByText(/Add your OpenAI key/)).toBeNull();
   });
 });
 
@@ -1668,25 +1321,6 @@ describe("ChatPanel composer chrome (#80)", () => {
     await waitFor(() =>
       expect(screen.getByTestId("chat-model-indicator")).toHaveTextContent("gpt-5.1"),
     );
-  });
-
-  it("hides the model in a workspace, where the server picks it", async () => {
-    // `model` is the LOCAL chat_model setting; a workspace turn runs on the
-    // server's model, so naming the local one would be actively misleading.
-    signIntoWorkspace();
-    mockTauri({
-      provider_key_get: () => "sk-test",
-      chat_history: () => history(),
-      settings_get: (args) => {
-        const key = (args as { key?: string }).key;
-        if (key === "chat_model") return "gpt-5.1";
-        if (key === "onboarding_completed") return "true";
-        return null;
-      },
-    });
-    renderPanel();
-    await screen.findByPlaceholderText(/Ask about your notes/);
-    expect(screen.queryByTestId("chat-model-indicator")).toBeNull();
   });
 
   it("warns that a long note may be trimmed BEFORE a turn is spent", async () => {
@@ -1854,205 +1488,6 @@ describe("ChatPanel stop (#80)", () => {
     fireEvent.keyDown(screen.getByPlaceholderText(/press Enter to stop/), { key: "Enter" });
     await waitFor(() => expect(cancels).toHaveLength(1));
     await act(async () => release());
-  });
-});
-
-// The conversation's pinned authorship filter (#103) — "Created by me" beside the
-// breadth picker. Breadth says WHAT is in reach; this says WHOSE.
-describe("ChatPanel authorship pin", () => {
-  // The pin is set from the shared `+ Filter` panel and shown as a token, so
-  // these drive that surface. The contract is unchanged: an id rather than a
-  // flag, cleared with null, and inert when it is someone else's.
-
-  /** Open the composer's filter panel. */
-  async function openPicker() {
-    await userEvent.click(await screen.findByTestId("chat-pin-picker"));
-  }
-
-  /** The panel's author control, or null when it isn't offered. */
-  function authorControl() {
-    return screen.queryByRole("button", { name: /^(Only me|Anyone)$/ });
-  }
-
-  // Signed into a workspace WITHOUT billing (so the BYOK activation pane doesn't
-  // gate the composer), as a user with an id — the chip resolves the pin against
-  // that id directly, not against a display name.
-  function signInAs(id = "u-me", name = "Michael") {
-    const ws = { id: "ws1", name: "Acme Team", role: "owner" as const, plan_status: "active" as const };
-    useCloudStore.setState({
-      status: {
-        ...DISCONNECTED,
-        configured: true,
-        logged_in: true,
-        base_url: "https://sync.humla.team",
-        user: { id, name, email: `${id}@acme.com`, verified: true },
-        current_workspace: ws,
-        workspaces: [ws],
-      },
-      members: {
-        [id]: { id, name, email: `${id}@acme.com`, role: "owner" },
-        "u-anna": { id: "u-anna", name: "Anna", email: "anna@acme.com", role: "member" },
-      },
-    });
-  }
-
-  function renderGlobal() {
-    return render(
-      <MemoryRouter>
-        <ChatPanel target={{ kind: "global" }} />
-      </MemoryRouter>,
-    );
-  }
-
-  it("is absent in Personal, where every note is already yours", async () => {
-    mockTauri({ provider_key_get: () => "sk-test", chat_history: () => history(), chat_get_breadth: () => "all" });
-    renderGlobal();
-    await screen.findByPlaceholderText(/Ask about your notes/);
-    await openPicker();
-    expect(authorControl()).toBeNull();
-  });
-
-  // Presence tracks the SCOPE, not the note. Under `note` breadth the filter is
-  // either a no-op (your own note) or empties the pane's own anchor (a
-  // teammate's) — the same reason the date window is dropped there.
-  it("is absent under note breadth, and appears once the scope widens", async () => {
-    signInAs();
-    seedNoteWithFolder();
-    mockTauri({ provider_key_get: () => "sk-test", chat_history: () => history(), chat_get_breadth: () => "note" });
-    renderPanel();
-
-    await screen.findByPlaceholderText(/Ask about your notes/);
-    await openPicker();
-    expect(authorControl()).toBeNull();
-    await userEvent.keyboard("{Escape}");
-
-    await userEvent.click(await screen.findByRole("button", { name: "Chat scope" }));
-    await userEvent.click(await screen.findByRole("menuitemradio", { name: "All notes" }));
-    await openPicker();
-    await waitFor(() => expect(authorControl()).toBeInTheDocument());
-  });
-
-  // Pinned on a DRAFT (the library-wide default since #120): nothing is written
-  // through, because there is no conversation to write to — the chip holds the pin
-  // and the first turn carries it in. The #103 guarantee is unchanged, it just
-  // binds one step later; `chat_send` carrying `draftOwnerFilter` is asserted in
-  // the draft suite, and Rust covers the row being created with it.
-  it("pins to the signed-in user's id, not to their name", async () => {
-    signInAs("u-me");
-    const sends: Record<string, unknown>[] = [];
-    mockTauri({
-      provider_key_get: () => "sk-test",
-      chat_history: () => history(),
-      chat_get_breadth: () => "all",
-      chat_send: (a) => {
-        sends.push(a as Record<string, unknown>);
-        return { conversationId: "c-fresh", truncated: false };
-      },
-    });
-    renderGlobal();
-
-    await openPicker();
-    await userEvent.click(screen.getByRole("button", { name: "Only me" }));
-    await waitFor(() => expect(screen.getByTestId("chat-pin-strip")).toHaveTextContent("Created by me"));
-
-    const input = screen.getByPlaceholderText(/Ask about your notes/);
-    fireEvent.change(input, { target: { value: "what did we agree?" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-
-    await waitFor(() => expect(sends).toHaveLength(1));
-    // The ID, never the display name — a name is prompt wording only.
-    expect(sends[0].draftOwnerFilter).toBe("u-me");
-  });
-
-  // Clearing a pin on an OPEN conversation still writes through as null — an
-  // existing row is the source of truth, so the clear has to reach it. (The
-  // drafting case has no row and is covered above.) `history` returns a message so
-  // the pane resolves a conversation, which is what makes this the write path.
-  it("clears the pin by sending null, not an empty string", async () => {
-    signInAs("u-me");
-    const writes: { owner?: string | null }[] = [];
-    mockTauri({
-      provider_key_get: () => "sk-test",
-      chat_history: () => history([userMsg("earlier question")]),
-      chat_get_breadth: () => "all",
-      chat_get_owner_filter: () => "u-me",
-      chat_set_owner_filter: (a) => {
-        writes.push(a as { owner?: string | null });
-        return null;
-      },
-    });
-    renderGlobal();
-
-    // Cleared from the token's own ×, which is one click — the property that
-    // decided the strip over a collapsing chip.
-    fireEvent.click(await screen.findByRole("button", { name: "Remove filter: Created by me" }));
-    await waitFor(() => expect(writes).toHaveLength(1));
-    expect(writes[0]!.owner).toBeNull();
-  });
-
-  // Anna's way out of a thread pinned to Michael is her own thread — the
-  // alternative is her quietly rewriting what his scrollback means.
-  it("names someone else's pin and refuses to let you change it", async () => {
-    signInAs("u-me");
-    const writes: unknown[] = [];
-    mockTauri({
-      provider_key_get: () => "sk-test",
-      chat_history: () => history(),
-      chat_get_breadth: () => "all",
-      chat_get_owner_filter: () => "u-anna",
-      chat_set_owner_filter: (a) => {
-        writes.push(a);
-        return null;
-      },
-    });
-    renderGlobal();
-
-    // Shown, because it binds every answer in the thread — but with no × to lift
-    // it, and no author control in the panel either.
-    expect(await screen.findByTestId("chat-pin-strip")).toHaveTextContent("Created by Anna");
-    expect(screen.queryByRole("button", { name: /Remove filter: Created by Anna/ })).toBeNull();
-    await openPicker();
-    expect(authorControl()).toBeNull();
-    expect(writes).toHaveLength(0);
-  });
-
-  // The id filters; the name is only the model's disclosure wording. An
-  // unresolvable person must not read as "me" — that would misattribute a
-  // teammate's filter to whoever is looking at the thread.
-  it("stays neutral about a pin it cannot resolve, and still shows it as on", async () => {
-    signInAs("u-me");
-    mockTauri({
-      provider_key_get: () => "sk-test",
-      chat_history: () => history(),
-      chat_get_breadth: () => "all",
-      chat_get_owner_filter: () => "u-departed",
-    });
-    renderGlobal();
-
-    expect(await screen.findByTestId("chat-pin-strip")).toHaveTextContent("Created by someone else");
-    expect(screen.queryByRole("button", { name: /Remove filter: Created by someone else/ })).toBeNull();
-  });
-
-  it("sends the pinned person's name with the turn, for the model's disclosure", async () => {
-    signInAs("u-me");
-    const sends: { ownerName?: string | null }[] = [];
-    mockTauri({
-      provider_key_get: () => "sk-test",
-      chat_history: () => history(),
-      chat_get_breadth: () => "all",
-      chat_get_owner_filter: () => "u-anna",
-      chat_send: (a) => {
-        sends.push(a as { ownerName?: string | null });
-        return { conversationId: "c1", truncated: false };
-      },
-    });
-    renderGlobal();
-
-    const input = await screen.findByPlaceholderText(/Ask about your notes/);
-    fireEvent.change(input, { target: { value: "what did we decide?" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() => expect(sends).toHaveLength(1));
-    expect(sends[0]!.ownerName).toBe("Anna");
   });
 });
 

@@ -23,7 +23,6 @@ export const STEP_ORDER = [
   "language",
   "transcription",
   "summary",
-  "cloud",
   "done",
 ] as const;
 
@@ -103,7 +102,7 @@ export async function resolveResumeStep(
 ): Promise<StepId> {
   if (!onboardingCompleted) return firstIncompleteStep(persistedStep);
   // Lazy import to keep the type module free of runtime deps that would drag
-  // the IPC/cloud layer into anything that only wants the STEP_ORDER types.
+  // the IPC layer into anything that only wants the STEP_ORDER types.
   const { computeSetupStatus } = await import("../../lib/setupStatus");
   try {
     const s = await computeSetupStatus();
