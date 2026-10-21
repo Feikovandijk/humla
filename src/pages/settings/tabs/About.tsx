@@ -136,14 +136,6 @@ export function AboutTab() {
             file in the repo for the full text.
           </p>
         </Row>
-        <Row label="Privacy">
-          <p className="text-sm">No tracking, no profiles, no third-party analytics.</p>
-          <p className="text-xs text-[var(--color-text-muted)] mt-2">
-            Your notes, audio, and transcripts stay on your Mac. Humla sends
-            nothing anywhere unless you select a cloud provider for
-            transcription, summaries or chat — and then only to that provider.
-          </p>
-        </Row>
       </Section>
 
       <Section title="Storage">
