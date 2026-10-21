@@ -12,8 +12,8 @@ export type Release = {
 export const releases: Release[] = [
   {
     // Stamped with the real version and date by CI when this merges to main.
-    version: "next",
-    date: "",
+    version: "0.71.0",
+    date: "2026-10-21",
     title: "More models, cleaner transcripts, fully local",
     summary: "More on-device transcription models, a cleaned-up copy of every transcript, raw audio export, and Humla Cloud is gone.",
     paragraphs: [
