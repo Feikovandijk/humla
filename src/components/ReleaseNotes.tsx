@@ -140,6 +140,7 @@ export function ReleaseNotes() {
   const [selected, setSelected] = useState<Release | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
   const close = useCallback(() => setSelected(null), []);
+  if (!latestReleases.length) return null;
   return (
     <section className="release-section" aria-labelledby="release-heading">
       <div className="release-section-heading"><h2 id="release-heading">What’s new</h2><span>The latest from Transcriberr</span></div>

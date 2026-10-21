@@ -1,6 +1,6 @@
 [package]
 name = "humla"
-version = "0.71.2"
+version = "0.1.0"
 description = "Transcriberr — personal meeting notes"
 authors = ["Michael Wilhelmsen"]
 edition = "2021"
