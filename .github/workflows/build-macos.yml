@@ -1,20 +1,24 @@
 name: Build macOS app
 
+# Every push to main is a release: the merged PR's `release:minor` / `release:major`
+# label picks the bump (none = patch), and its notes are the releases.ts entry
+# written as version "next". A manual run builds a DMG without releasing.
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   workflow_dispatch:
 
 concurrency:
   group: build-macos-${{ github.ref }}
-  cancel-in-progress: true
+  # Queue releases rather than cancel one between its push and its GitHub release.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
-  contents: write # gh release create on tags
+  contents: write # push the release commit + tag, gh release create
+  pull-requests: read # the merged PR's labels
 
 env:
-  IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
+  IS_RELEASE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 jobs:
   build:
@@ -24,12 +28,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check tag matches app version
-        if: env.IS_RELEASE == 'true'
-        run: |
-          VERSION=$(node -p "require('./package.json').version")
-          [[ "v$VERSION" == "$GITHUB_REF_NAME" ]] || { echo "tag $GITHUB_REF_NAME != package.json v$VERSION" >&2; exit 1; }
-
       - uses: pnpm/action-setup@v4
         with:
           version: 9
@@ -38,14 +36,43 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Check changelog entry
+      # Before the build, so missing notes fail in a minute rather than after it.
+      # Nothing is pushed until the build has succeeded.
+      - name: Pick the version and stamp the release notes
         if: env.IS_RELEASE == 'true'
-        run: node scripts/check-release-notes.mjs "${GITHUB_REF_NAME#v}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LABELS=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '[.[].labels[].name] | join(" ")')
+          case " $LABELS " in
+            *" release:major "*) BUMP=major ;;
+            *" release:minor "*) BUMP=minor ;;
+            *) BUMP=patch ;;
+          esac
+          VERSION=$(node scripts/stamp-release.mjs "$BUMP" "$(date -u +%F)")
+          node scripts/check-release-notes.mjs "$VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::Tag v$VERSION already exists on origin" >&2; exit 1
+          fi
+          echo "Releasing $VERSION ($BUMP)"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "TAG=v$VERSION" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+
+      # The sidecar scripts skip the Swift build when their binary's source-hash
+      # stamp matches, so restoring both saves the FluidAudio compile (~4 min).
+      - uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/binaries/audio-capture-*
+            src-tauri/binaries/speaker-diarize-*
+            src-tauri/binaries/.audio-capture-*.stamp
+            src-tauri/binaries/.speaker-diarize-*.stamp
+          key: swift-sidecars-${{ runner.os }}-${{ hashFiles('audio-capture/**', 'speaker-diarize/Package.swift', 'speaker-diarize/Sources/**', 'scripts/build-sidecar.sh', 'scripts/build-diarize.sh', 'src-tauri/sidecar.entitlements') }}
 
       # build-dmg.sh skips the diarize sidecar (it expects a prebuilt one), so CI builds it here.
       # With no Developer ID in the runner's keychain, every script falls back to ad-hoc signing.
@@ -54,11 +81,11 @@ jobs:
           ./scripts/build-sidecar.sh
           ./scripts/build-diarize.sh
           ./scripts/build-metallib.sh
-          ./scripts/build-mcp.sh
+          ./scripts/build-mcp.sh --features custom-protocol
 
       # shortcut: ad-hoc signed, no notarisation; add the Developer ID + notarytool secrets
       # and drop the signingIdentity override to ship notarised builds.
-      # Updater artifacts only on tags, so branch builds need no signing secret.
+      # Updater artifacts only on releases, so other builds need no signing secret.
       - name: Build app bundle
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ env.IS_RELEASE == 'true' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
@@ -73,11 +100,20 @@ jobs:
           path: src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
-      - name: Publish GitHub release
+      # Atomic, and without --force: if main moved on during the build, nothing is
+      # pushed and the next merge releases instead.
+      - name: Commit, tag and publish the release
         if: env.IS_RELEASE == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+          # Only the version files: the build may have touched other tracked files.
+          git commit -m "chore(release): $VERSION" -- package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock src/content/releases.ts
+          git tag "$TAG"
+          git push --atomic origin HEAD:main "refs/tags/$TAG"
+
           BUNDLE=src-tauri/target/release/bundle
           TARBALL=$BUNDLE/macos/Humla.app.tar.gz
           node -e '
@@ -92,8 +128,12 @@ jobs:
                 url: `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${tag}/Humla.app.tar.gz`,
               } },
             }, null, 2));
-          ' "$GITHUB_REF_NAME" "$TARBALL.sig" "$BUNDLE/latest.json"
+          ' "$TAG" "$TARBALL.sig" "$BUNDLE/latest.json"
           cat "$BUNDLE/latest.json"
-          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" \
+          gh release create "$TAG" --title "$TAG" \
             --notes "Apple Silicon: download the DMG, drag to Applications, right-click → Open on first launch. Existing installs update themselves." \
             $BUNDLE/dmg/*.dmg "$TARBALL" "$TARBALL.sig" "$BUNDLE/latest.json"
+
+          # Bring dev up to the release commit so the next dev → main PR starts from
+          # it. Fast-forward only; if dev has moved on, merge main into it by hand.
+          git push origin HEAD:dev || echo "::warning::dev has moved on; merge main into dev to pick up v$VERSION"
