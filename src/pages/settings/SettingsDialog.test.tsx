@@ -1,10 +1,16 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { latestReleases } from "../../content/releases";
 import { writeSetting } from "../../lib/settingsBus";
 import { renderApp, openSettingsFromSidebar } from "../../test/app";
 import type { TranscribeConfig } from "../../lib/ipc";
+
+// The changelog can be empty (it was reset at 0.1.0), so the release-notes test brings its own entry.
+vi.mock("../../content/releases", () => {
+  const release = { version: "0.1.0", date: "2026-10-21", title: "Test release", summary: "s", paragraphs: ["p"], highlights: ["h"], issues: [] };
+  return { releases: [release], latestReleases: [release] };
+});
 
 describe("settings dialog", () => {
   it("dismisses release notes before opening Settings with the keyboard shortcut", async () => {
