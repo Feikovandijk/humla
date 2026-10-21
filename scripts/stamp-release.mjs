@@ -16,15 +16,14 @@ export function bumpVersion(current, level) {
   throw new Error(`Unknown bump level: ${level}`);
 }
 
-// Exactly one entry may be "next": none means the release has no notes, and two
-// would leave it ambiguous which one this release is.
+// At most one entry may be "next": none releases without notes, and two would
+// leave it ambiguous which one this release is.
 export function stampNextRelease(source, version, date) {
   const re = /version: "next",(\s*)date: "[^"]*",/g;
   const count = source.match(re)?.length ?? 0;
-  if (count !== 1) {
+  if (count > 1) {
     throw new Error(
-      `Expected exactly one release entry with version "next" in src/content/releases.ts, found ${count}. ` +
-        `Add the release notes to the dev → main PR as version "next".`,
+      `Expected at most one release entry with version "next" in src/content/releases.ts, found ${count}.`,
     );
   }
   return source.replace(re, `version: "${version}",$1date: "${date}",`);

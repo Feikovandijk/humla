@@ -24,11 +24,11 @@ jobs:
         with:
           ref: dev
 
-      # The release refuses to run without notes, so say so now rather than after the merge.
-      - name: Check dev has release notes
+      # Notes are optional, but the release refuses two "next" entries, so say so now rather than after the merge.
+      - name: Check dev's release notes
         run: |
           COUNT=$(grep -c 'version: "next",' src/content/releases.ts || true)
-          [[ "$COUNT" == 1 ]] || { echo "::error::src/content/releases.ts on dev needs exactly one entry with version \"next\" (found $COUNT)"; exit 1; }
+          [[ "$COUNT" -le 1 ]] || { echo "::error::src/content/releases.ts on dev has $COUNT entries with version \"next\"; keep at most one"; exit 1; }
 
       - name: Open or update the PR and set its label
         env:

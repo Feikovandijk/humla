@@ -36,7 +36,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Before the build, so missing notes fail in a minute rather than after it.
+      # Before the build, so incomplete notes fail in a minute rather than after it.
       # Nothing is pushed until the build has succeeded.
       - name: Pick the version and stamp the release notes
         if: env.IS_RELEASE == 'true'
@@ -50,7 +50,10 @@ jobs:
             *) BUMP=patch ;;
           esac
           VERSION=$(node scripts/stamp-release.mjs "$BUMP" "$(date -u +%F)")
-          node scripts/check-release-notes.mjs "$VERSION"
+          # Notes are optional; when there are some, they must be complete.
+          if grep -q "version: \"$VERSION\"," src/content/releases.ts; then
+            node scripts/check-release-notes.mjs "$VERSION"
+          fi
           if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
             echo "::error::Tag v$VERSION already exists on origin" >&2; exit 1
           fi
