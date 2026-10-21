@@ -230,6 +230,7 @@ function TranscriptPlayerHarness({
   return (
     <TranscriptPlayer
       noteId="mock-note"
+      title="Mock note"
       timeline={timeline}
       setTimeline={setTimeline}
       sessions={[

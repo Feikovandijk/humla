@@ -223,16 +223,30 @@ pub fn note_recording_audio(app: AppHandle, note_id: String) -> Result<Vec<Recor
     Ok(files)
 }
 
+/// Which of a take's WAVs to export: a raw stream, or the mixed `playback.wav`
+/// the note's player plays.
+#[derive(Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExportAudio {
+    Mic,
+    Sys,
+    Playback,
+}
+
 fn copy_recording_audio(
     recordings: &std::path::Path,
     session_id: &str,
-    source: crate::recording::ChunkSource,
+    source: ExportAudio,
     destination: &std::path::Path,
 ) -> Result<(), String> {
     let dir = crate::sessions::resolve_session_dir(recordings, session_id)
         .ok_or_else(|| "recording session not found".to_string())?;
-    let path = dir.join(format!("{}.wav", source.as_str()));
-    let path = path.canonicalize().map_err(|e| format!("recording audio unavailable: {e}"))?;
+    let file = match source {
+        ExportAudio::Mic => "mic.wav",
+        ExportAudio::Sys => "sys.wav",
+        ExportAudio::Playback => "playback.wav",
+    };
+    let path = dir.join(file).canonicalize().map_err(|e| format!("recording audio unavailable: {e}"))?;
     if !path.starts_with(recordings.canonicalize().map_err(err)?) {
         return Err("audio outside recording directory".into());
     }
@@ -249,13 +263,13 @@ fn copy_recording_audio(
     Ok(())
 }
 
-/// Copy a raw WAV to the path selected in the native save panel.
+/// Copy a take's WAV to the path selected in the native save panel.
 #[tauri::command]
 pub async fn export_recording_audio(
     app: AppHandle,
     note_id: String,
     session_id: String,
-    source: crate::recording::ChunkSource,
+    source: ExportAudio,
     path: String,
 ) -> Result<(), String> {
     if !crate::sessions::is_safe_session_id(&note_id) {
@@ -271,8 +285,7 @@ pub async fn export_recording_audio(
 #[cfg(test)]
 mod recording_export_tests {
     use super::*;
-    use crate::recording::ChunkSource;
-    use std::{fs, path::Path};
+        use std::{fs, path::Path};
 
     #[test]
     fn exports_the_requested_raw_stream_without_touching_the_original() {
@@ -284,12 +297,15 @@ mod recording_export_tests {
         fs::write(recordings.join("take1/mic.wav"), b"microphone").unwrap();
         fs::write(recordings.join("take1/sys.wav"), b"system").unwrap();
         let destination = tmp.path().join("export.wav");
-        copy_recording_audio(&recordings, "take1", ChunkSource::Sys, &destination).unwrap();
+        copy_recording_audio(&recordings, "take1", ExportAudio::Sys, &destination).unwrap();
         assert_eq!(fs::read(&destination).unwrap(), b"system");
         assert_eq!(fs::read(recordings.join("take1/sys.wav")).unwrap(), b"system");
-        assert!(copy_recording_audio(&recordings, "../take1", ChunkSource::Mic, &destination).is_err());
-        assert!(copy_recording_audio(&recordings, "missing", ChunkSource::Mic, &destination).is_err());
-        assert!(copy_recording_audio(&recordings, "take1", ChunkSource::Mic,
+        fs::write(recordings.join("take1/playback.wav"), b"mixed").unwrap();
+        copy_recording_audio(&recordings, "take1", ExportAudio::Playback, &destination).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"mixed");
+        assert!(copy_recording_audio(&recordings, "../take1", ExportAudio::Mic, &destination).is_err());
+        assert!(copy_recording_audio(&recordings, "missing", ExportAudio::Mic, &destination).is_err());
+        assert!(copy_recording_audio(&recordings, "take1", ExportAudio::Mic,
             &recordings.join("take1/sys.wav")).is_err());
         assert_eq!(fs::read(recordings.join("take1/sys.wav")).unwrap(), b"system");
     }
@@ -302,15 +318,15 @@ mod recording_export_tests {
         fs::write(recordings.join("mic.wav"), b"legacy mic").unwrap();
         let destination = tmp.path().join("export.wav");
         copy_recording_audio(&recordings, crate::sessions::LEGACY_SESSION_ID,
-            ChunkSource::Mic, &destination).unwrap();
+            ExportAudio::Mic, &destination).unwrap();
         assert_eq!(fs::read(&destination).unwrap(), b"legacy mic");
         assert!(copy_recording_audio(&recordings, crate::sessions::LEGACY_SESSION_ID,
-            ChunkSource::Sys, Path::new("/missing/export.wav")).is_err());
+            ExportAudio::Sys, Path::new("/missing/export.wav")).is_err());
         let secret = tmp.path().join("secret.wav");
         fs::write(&secret, b"outside").unwrap();
         std::os::unix::fs::symlink(&secret, recordings.join("sys.wav")).unwrap();
         assert!(copy_recording_audio(&recordings, crate::sessions::LEGACY_SESSION_ID,
-            ChunkSource::Sys, &destination).is_err());
+            ExportAudio::Sys, &destination).is_err());
         assert_eq!(fs::read(&destination).unwrap(), b"legacy mic");
     }
 }
