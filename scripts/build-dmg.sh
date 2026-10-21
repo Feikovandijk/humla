@@ -37,7 +37,7 @@ fi
 ./scripts/build-metallib.sh
 # The MCP server (#172) ships inside the bundle as an externalBin, so it must
 # exist before `tauri build` runs or the bundler fails on a missing sidecar.
-./scripts/build-mcp.sh
+./scripts/build-mcp.sh --features custom-protocol
 
 pnpm tauri build
 

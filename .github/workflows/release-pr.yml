@@ -1,6 +1,8 @@
 name: Release PR
 
-# Actions → Release PR → Run workflow → pick the bump. Commits the bump to dev and opens dev → main.
+# Actions → Release PR → Run workflow → pick the bump. Opens (or updates) the
+# dev → main PR and labels it; merging it releases, and the Build macOS app
+# workflow bumps the version then. No label means patch.
 on:
   workflow_dispatch:
     inputs:
@@ -11,60 +13,37 @@ on:
         default: patch
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
 
 jobs:
-  bump:
+  open:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: dev
 
-      - name: Bump version
-        id: bump
-        env:
-          BUMP: ${{ inputs.bump }}
+      # The release refuses to run without notes, so say so now rather than after the merge.
+      - name: Check dev has release notes
         run: |
-          node -e '
-            const fs = require("fs");
-            const cur = require("./package.json").version;
-            let [ma, mi, pa] = cur.split(".").map(Number);
-            const bump = process.env.BUMP;
-            if (bump === "major") [ma, mi, pa] = [ma + 1, 0, 0];
-            else if (bump === "minor") [mi, pa] = [mi + 1, 0];
-            else pa++;
-            const next = `${ma}.${mi}.${pa}`;
-            // Exact-match replace (not JSON rewrite) so each file keeps its formatting.
-            const edit = (file, from, to) => {
-              const src = fs.readFileSync(file, "utf8");
-              if (!src.includes(from)) throw new Error(`${file}: "${from}" not found`);
-              fs.writeFileSync(file, src.replace(from, to));
-            };
-            edit("package.json", `"version": "${cur}"`, `"version": "${next}"`);
-            edit("src-tauri/tauri.conf.json", `"version": "${cur}"`, `"version": "${next}"`);
-            edit("src-tauri/Cargo.toml", `\nversion = "${cur}"`, `\nversion = "${next}"`);
-            edit("src-tauri/Cargo.lock", `name = "humla"\nversion = "${cur}"`, `name = "humla"\nversion = "${next}"`);
-            fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${next}\n`);
-          '
-          git diff --stat
+          COUNT=$(grep -c 'version: "next",' src/content/releases.ts || true)
+          [[ "$COUNT" == 1 ]] || { echo "::error::src/content/releases.ts on dev needs exactly one entry with version \"next\" (found $COUNT)"; exit 1; }
 
-      - name: Commit to dev and open PR to main
+      - name: Open or update the PR and set its label
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.bump.outputs.version }}
+          BUMP: ${{ inputs.bump }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
-          git commit -am "chore(release): $VERSION"
-          git push origin dev
-          BODY="Bumps the version to $VERSION.
-
-          Before merging: add the $VERSION entry to \`src/content/releases.ts\` (the tag build fails without it).
-          After merging: tag \`v$VERSION\` on main to publish the release."
-          if [[ -n "$(gh pr list --base main --head dev --state open --json number -q '.[0].number')" ]]; then
-            gh pr edit dev --title "Release v$VERSION" --body "$BODY"
+          gh label create release:minor --color 1d76db --description "Release bumps the minor version" --force
+          gh label create release:major --color b60205 --description "Release bumps the major version" --force
+          PR=$(gh pr list --base main --head dev --state open --json number -q '.[0].number')
+          if [[ -z "$PR" ]]; then
+            gh pr create --base main --head dev --title "Release ($BUMP)" \
+              --body "Merging this releases. The Build macOS app workflow bumps the version ($BUMP) and publishes it, using the \"next\" entry in \`src/content/releases.ts\` as the release notes."
+            PR=$(gh pr list --base main --head dev --state open --json number -q '.[0].number')
           else
-            gh pr create --base main --head dev --title "Release v$VERSION" --body "$BODY"
+            gh pr edit "$PR" --title "Release ($BUMP)"
           fi
+          gh pr edit "$PR" --remove-label release:minor --remove-label release:major
+          [[ "$BUMP" == patch ]] || gh pr edit "$PR" --add-label "release:$BUMP"

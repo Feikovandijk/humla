@@ -108,5 +108,5 @@ On a fresh clone `src-tauri/binaries/` doesn't exist. `tauri-build` fails when a
 - **Any code that writes a note's files ends with `purge_note_assets_if_gone`.**
 - **Bump `CHUNKER_VERSION` when chunk boundaries change.**
 - **Releases:**
-  - Bump the version in `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml` (they must match).
-  - Add an entry to `src/content/releases.ts`.
+  - A merge to `main` releases: CI bumps the version (`release:minor` / `release:major` PR label, else patch), tags it and publishes. Don't bump versions or push tags by hand.
+  - The `dev → main` PR must carry exactly one `src/content/releases.ts` entry with `version: "next"`; CI stamps the real version and date into it.
