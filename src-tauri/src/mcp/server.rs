@@ -89,7 +89,7 @@ impl HumlaMcp {
             // It carries no note title and no note id: the whole promise of the gate
             // is that nothing from the library is readable until the user opts in,
             // and a resource list is readable without any tool being called.
-            return vec![Resource::new(RESOURCE_DISABLED, "Humla — integration turned off")
+            return vec![Resource::new(RESOURCE_DISABLED, "Transcriberr — integration turned off")
                 .with_description(super::disabled_message())
                 .with_mime_type("text/plain")];
         }
@@ -117,7 +117,7 @@ impl HumlaMcp {
             return Ok(super::disabled_message());
         }
         let Some(note_id) = uri.strip_prefix(RESOURCE_PREFIX) else {
-            return Err(ErrorData::resource_not_found(format!("Not a Humla note URI: {uri}"), None));
+            return Err(ErrorData::resource_not_found(format!("Not a Transcriberr note URI: {uri}"), None));
         };
         // Straight through the same seam the tool takes, so a resource read and a
         // `get_note` call can never come to mean different things — including the

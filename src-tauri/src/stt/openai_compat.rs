@@ -200,8 +200,8 @@ mod tests {
     #[test]
     fn vocab_only_returns_joined() {
         assert_eq!(
-            build_whisper_prompt(&["Humla", "Tauri"], None),
-            Some("Humla, Tauri".to_string())
+            build_whisper_prompt(&["Transcriberr", "Tauri"], None),
+            Some("Transcriberr, Tauri".to_string())
         );
     }
 
@@ -216,8 +216,8 @@ mod tests {
     #[test]
     fn vocab_and_trail_join_with_period() {
         assert_eq!(
-            build_whisper_prompt(&["Humla"], Some("hello world")),
-            Some("hello world. Humla".to_string())
+            build_whisper_prompt(&["Transcriberr"], Some("hello world")),
+            Some("hello world. Transcriberr".to_string())
         );
     }
 

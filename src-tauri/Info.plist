@@ -3,8 +3,8 @@
 <plist version="1.0">
 <dict>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Humla records your microphone during meetings to transcribe and summarize them.</string>
+    <string>Transcriberr records your microphone during meetings to transcribe and summarize them.</string>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>Humla captures system audio (the other side of meetings) to transcribe and summarize them. No video is recorded.</string>
+    <string>Transcriberr captures system audio (the other side of meetings) to transcribe and summarize them. No video is recorded.</string>
 </dict>
 </plist>

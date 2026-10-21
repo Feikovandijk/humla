@@ -20,7 +20,7 @@ use rmcp::ServiceExt;
 #[tokio::main]
 async fn main() {
     let Some(path) = mcp::db_path() else {
-        eprintln!("humla-mcp: could not locate Humla's data directory");
+        eprintln!("humla-mcp: could not locate Transcriberr's data directory");
         std::process::exit(1);
     };
     // A missing database means Humla has never run on this machine. Said plainly
@@ -29,7 +29,7 @@ async fn main() {
     // question with a confident, wrong "you have no notes".
     if !path.exists() {
         eprintln!(
-            "humla-mcp: no Humla library at {} — open Humla once to create it",
+            "humla-mcp: no Transcriberr library at {} — open Transcriberr once to create it",
             path.display()
         );
         std::process::exit(1);

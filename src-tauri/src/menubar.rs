@@ -339,8 +339,8 @@ fn icon_for(glyph: TrayGlyph) -> (Image<'static>, bool) {
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let start = MenuItem::with_id(app, ID_START, "Start recording", true, None::<&str>)?;
     let stop = MenuItem::with_id(app, ID_STOP, "Stop recording", false, None::<&str>)?;
-    let open = MenuItem::with_id(app, ID_OPEN, "Open Humla", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, ID_QUIT, "Quit Humla", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, ID_OPEN, "Open Transcriberr", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, ID_QUIT, "Quit Transcriberr", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -358,7 +358,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         // Pure black plus this flag: a macOS template image is read through its
         // alpha channel only, and the system tints the glyph for the bar.
         .icon_as_template(true)
-        .tooltip("Humla")
+        .tooltip("Transcriberr")
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -547,7 +547,7 @@ pub fn starts_hidden(args: impl IntoIterator<Item = String>, onboarded: bool) ->
 pub fn login_item_path_problem(exe: &std::path::Path) -> Option<&'static str> {
     let path = exe.to_string_lossy();
     if path.starts_with("/Volumes/") || path.contains("/AppTranslocation/") {
-        Some("Move Humla to your Applications folder and open it from there first.")
+        Some("Move Transcriberr to your Applications folder and open it from there first.")
     } else {
         None
     }

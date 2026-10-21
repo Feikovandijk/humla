@@ -260,7 +260,7 @@ export function SummaryStep({ ctx }: { ctx: StepContext }) {
       <StepShell
         icon={<Sparkles size={26} strokeWidth={1.6} />}
         title="Set up AI summaries"
-        subtitle="Humla fuses your notes with the transcript into a summary."
+        subtitle="Transcriberr fuses your notes with the transcript into a summary."
       />
     );
   }
@@ -271,8 +271,8 @@ export function SummaryStep({ ctx }: { ctx: StepContext }) {
       title="Set up AI summaries"
       subtitle={
         neutral
-          ? "Humla fuses your notes with the transcript into a summary — and powers AI Chat over your notes. Local: private, needs Ollama + ~6 GB RAM · OpenAI: better summaries, needs API key."
-          : "Humla fuses your notes with the transcript into a summary, and powers AI Chat over your notes. This is optional — you can skip it and set it up later."
+          ? "Transcriberr fuses your notes with the transcript into a summary — and powers AI Chat over your notes. Local: private, needs Ollama + ~6 GB RAM · OpenAI: better summaries, needs API key."
+          : "Transcriberr fuses your notes with the transcript into a summary, and powers AI Chat over your notes. This is optional — you can skip it and set it up later."
       }
     >
       <div className="w-full max-w-md flex flex-col gap-3 text-left">
@@ -476,7 +476,7 @@ export function SummaryStep({ ctx }: { ctx: StepContext }) {
                       {!recommendedInstalled && (
                         <>
                           <p className="text-xs leading-relaxed text-[var(--color-text-muted)]">
-                            The recommended model isn't installed — Humla will
+                            The recommended model isn't installed — Transcriberr will
                             use the one below. For better summaries, pull it:
                           </p>
                           <PullCommand copied={copied} onCopy={copyPullCommand} />

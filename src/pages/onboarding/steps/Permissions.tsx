@@ -169,7 +169,7 @@ export function PermissionsStep({ ctx }: { ctx: StepContext }) {
       <StepShell
         icon={<ShieldCheck size={26} strokeWidth={1.6} />}
         title="Grant recording permissions"
-        subtitle="Humla needs microphone access to record. System audio is optional."
+        subtitle="Transcriberr needs microphone access to record. System audio is optional."
       />
     );
   }
@@ -183,7 +183,7 @@ export function PermissionsStep({ ctx }: { ctx: StepContext }) {
     <StepShell
       icon={<ShieldCheck size={26} strokeWidth={1.6} />}
       title="Grant recording permissions"
-      subtitle="Humla needs microphone access to record. System audio is optional — grant it only if you record remote calls."
+      subtitle="Transcriberr needs microphone access to record. System audio is optional — grant it only if you record remote calls."
     >
       <div className="w-full max-w-md flex flex-col gap-3 text-left">
         {/* Microphone — required */}
@@ -202,7 +202,7 @@ export function PermissionsStep({ ctx }: { ctx: StepContext }) {
                 <StatusPill status={status.microphone} />
               </div>
               <p className="mt-1.5 text-xs leading-relaxed text-[var(--color-text-muted)]">
-                Required — captures your voice. Humla can't record without it.
+                Required — captures your voice. Transcriberr can't record without it.
               </p>
               {micBlocked && (
                 <p className="mt-1.5 text-xs leading-relaxed text-[var(--color-danger)]">
@@ -251,7 +251,7 @@ export function PermissionsStep({ ctx }: { ctx: StepContext }) {
               </div>
               <p className="mt-1.5 text-xs leading-relaxed text-[var(--color-text-muted)]">
                 macOS bundles system-audio capture under "Screen Recording."
-                Humla uses it to hear the other side of your calls — it never
+                Transcriberr uses it to hear the other side of your calls — it never
                 captures your screen.
               </p>
             </div>
@@ -281,7 +281,7 @@ export function PermissionsStep({ ctx }: { ctx: StepContext }) {
                   Restart required
                 </p>
                 <p className="mt-1 text-xs leading-relaxed text-[var(--color-text-muted)]">
-                  System audio was just enabled. Humla needs to restart for it to
+                  System audio was just enabled. Transcriberr needs to restart for it to
                   take effect — you'll return right here.
                 </p>
               </div>
@@ -291,7 +291,7 @@ export function PermissionsStep({ ctx }: { ctx: StepContext }) {
                 className="nd-btn nd-btn-primary shrink-0"
               >
                 <RotateCw size={14} strokeWidth={2} />
-                Restart Humla
+                Restart Transcriberr
               </button>
             </div>
           )}
@@ -314,7 +314,7 @@ export function PermissionsStep({ ctx }: { ctx: StepContext }) {
 
         {!micGranted && (
           <p className="text-xs text-[var(--color-text-muted)] text-center max-w-xs">
-            Allow microphone access to continue — Humla can't record without it.
+            Allow microphone access to continue — Transcriberr can't record without it.
           </p>
         )}
 
@@ -328,7 +328,7 @@ export function PermissionsStep({ ctx }: { ctx: StepContext }) {
           >
             Continue without restarting
             <span className="block text-[var(--color-text-disabled)]">
-              System audio won't work until you quit and reopen Humla.
+              System audio won't work until you quit and reopen Transcriberr.
             </span>
           </button>
         )}

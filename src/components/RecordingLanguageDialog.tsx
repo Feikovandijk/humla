@@ -35,7 +35,7 @@ function LanguageChoice({ noteId, sessionId }: { noteId: string; sessionId: stri
   return (
     <Modal open onClose={keepOpen} title="Choose the recording language" size="sm">
       <p className="text-sm text-[var(--color-text-muted)]">
-        Recording has started. Choose the language spoken so Humla can transcribe it.
+        Recording has started. Choose the language spoken so Transcriberr can transcribe it.
       </p>
       <div className="flex gap-3 mt-5">
         {LANGUAGES.map((language) => (
