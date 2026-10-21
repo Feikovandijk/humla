@@ -37,9 +37,12 @@ if [[ ! -f "$DEST" ]]; then
   trap 'rm -f "$DEST"' EXIT
 fi
 
+# Extra arguments go to cargo. Release packaging passes `--features custom-protocol`,
+# the feature `tauri build` turns on, so the app build reuses this compile instead
+# of rebuilding tauri, wry and the humla crate under a different feature set.
 (
   cd src-tauri
-  cargo build --release --bin humla-mcp
+  cargo build --release --bin humla-mcp "$@"
 )
 
 cp src-tauri/target/release/humla-mcp "$DEST"

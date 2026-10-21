@@ -229,20 +229,22 @@ For the full release pipeline (signed + notarised DMG + auto-updater payload + G
 The **Build macOS app** workflow (`.github/workflows/build-macos.yml`) builds the app on an Apple Silicon runner, so you don't need a local toolchain to get a DMG.
 
 It runs on:
-- **every push to `main`**, which produces a DMG you can download from the run's **Artifacts** (`Humla-<commit sha>`);
-- **a `v*` tag**, which also publishes a GitHub release;
-- **manually**, from Actions → Build macOS app → Run workflow.
+- **every push to `main`**, which publishes a release (below);
+- **manually**, from Actions → Build macOS app → Run workflow, which builds a DMG without releasing.
+
+Either way the DMG is also attached to the run's **Artifacts** (`Humla-<commit sha>`).
 
 Each run builds all four bundled pieces (the `audio-capture` and `speaker-diarize` sidecars, the Metal library and `humla-mcp`), then `pnpm tauri build`. Builds are **ad-hoc signed and not notarised**, so on first launch right-click Humla → Open.
 
-To publish a release:
+Releasing is merging `dev` into `main`; you never edit the version or push a tag yourself:
 
-1. Bump the version in `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`, and add its entry to `src/content/releases.ts`.
-2. Push a tag matching it, e.g. `git tag v0.70.1 && git push origin v0.70.1`.
+1. On `dev`, add the release notes to `src/content/releases.ts` as an entry with `version: "next"` (any date; it gets replaced).
+2. Run Actions → **Release PR** → pick patch, minor or major. It opens the `dev → main` PR and labels it `release:minor` / `release:major` (no label = patch). You can also open the PR and set the label by hand.
+3. Merge it.
 
-The tag build fails if the tag doesn't match `package.json` or the changelog entry is missing. Otherwise it signs the updater payload and creates the release with the DMG, `Humla.app.tar.gz`, its `.sig` and `latest.json`. Existing installs pick it up through the auto-updater.
+The build on `main` then picks the next version from the label, stamps it and today's date into the `"next"` entry, and builds. Only once the build succeeds does it push a `chore(release): x.y.z` commit and a `vx.y.z` tag to `main`, create the GitHub release (DMG, `Humla.app.tar.gz`, its `.sig` and `latest.json`) and fast-forward `dev` to match. Existing installs pick it up through the auto-updater. It fails before building if there isn't exactly one `"next"` entry, or the tag already exists.
 
-Signing the updater payload needs two repository secrets, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, matching the public key in `src-tauri/tauri.conf.json`. Branch builds don't use them.
+Signing the updater payload needs two repository secrets, `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, matching the public key in `src-tauri/tauri.conf.json`. Manual builds don't use them.
 
 ## Project layout
 

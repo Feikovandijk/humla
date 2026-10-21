@@ -11,6 +11,26 @@ export type Release = {
 
 export const releases: Release[] = [
   {
+    // Stamped with the real version and date by CI when this merges to main.
+    version: "next",
+    date: "",
+    title: "More models, cleaner transcripts, fully local",
+    summary: "More on-device transcription models, a cleaned-up copy of every transcript, raw audio export, and Humla Cloud is gone.",
+    paragraphs: [
+      "Settings → Transcription now offers eight more Whisper models and Parakeet Ultra, all running on your Mac.",
+      "The Transcript panel has a Clean tab: a copy of the transcript without filler words and false starts. The original stays as it is.",
+      "Recordings can be kept, and you can export a note's raw audio.",
+      "Humla Cloud is removed. There is no account, sign-in or team workspace any more, and nothing leaves your Mac unless you send it. Usage telemetry is gone too.",
+    ],
+    highlights: [
+      "Eight more Whisper models and Parakeet Ultra.",
+      "A cleaned-up copy of every transcript.",
+      "Keep recordings and export raw audio.",
+      "No more Humla Cloud or telemetry.",
+    ],
+    issues: [],
+  },
+  {
     version: "0.70.0",
     date: "2026-10-20",
     title: "Local models, simpler settings",
