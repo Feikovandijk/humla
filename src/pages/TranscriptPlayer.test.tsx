@@ -81,6 +81,7 @@ function renderPlayer(props: {
   return render(
     <TranscriptPlayer
       noteId="note-1"
+      title="Weekly sync"
       timeline={props.timeline}
       setTimeline={props.setTimeline ?? vi.fn()}
       sessions={props.sessions}
@@ -504,5 +505,39 @@ describe("TranscriptPlayer turn titles (#176)", () => {
       fallbackPlaybackUrl: null,
     });
     expect(await screen.findByText("12:34")).toBeInTheDocument();
+  });
+});
+
+describe("TranscriptPlayer audio export", () => {
+  it("exports the active take's mixed playback.wav", async () => {
+    const exportSpy = vi.fn();
+    mockTauri({
+      note_session_playback_path: () => null,
+      "plugin:dialog|save": () => "/Users/me/out.wav",
+      export_recording_audio: exportSpy,
+    });
+    renderPlayer({
+      sessions: [session({ id: "s1", index: 1 })],
+      timeline: [],
+      fallbackPlaybackUrl: null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Export audio of this recording" }));
+    await waitFor(() => expect(exportSpy).toHaveBeenCalled());
+    expect(exportSpy.mock.calls[0][0]).toMatchObject({
+      noteId: "note-1",
+      sessionId: "s1",
+      source: "playback",
+      path: "/Users/me/out.wav",
+    });
+  });
+
+  it("offers no export when the take has no playback file", () => {
+    mockTauri({ note_session_playback_path: () => null });
+    renderPlayer({
+      sessions: [session({ id: "s1", hasPlayback: false })],
+      timeline: [],
+      fallbackPlaybackUrl: "asset://legacy.wav",
+    });
+    expect(screen.queryByRole("button", { name: "Export audio of this recording" })).toBeNull();
   });
 });
