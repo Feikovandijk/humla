@@ -120,7 +120,7 @@ func holdSystemAwake() {
     let rc = IOPMAssertionCreateWithName(
         kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
         IOPMAssertionLevel(kIOPMAssertionLevelOn),
-        "Humla is recording a meeting" as CFString,
+        "Transcriberr is recording a meeting" as CFString,
         &id
     )
     if rc == kIOReturnSuccess {

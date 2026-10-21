@@ -28,7 +28,7 @@ export const PALETTE_REGISTRY = [
   {
     id: "warm",
     label: "Warm",
-    description: "Humla's own: cream paper, Hanken Grotesk, gold accent.",
+    description: "Transcriberr's own: cream paper, Hanken Grotesk, gold accent.",
     mode: "light",
   },
   {

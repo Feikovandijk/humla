@@ -100,7 +100,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Humla-${{ github.sha }}
+          name: Transcriberr-${{ github.sha }}
           path: src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
@@ -119,7 +119,7 @@ jobs:
           git push --atomic origin HEAD:main "refs/tags/$TAG"
 
           BUNDLE=src-tauri/target/release/bundle
-          TARBALL=$BUNDLE/macos/Humla.app.tar.gz
+          TARBALL=$BUNDLE/macos/Transcriberr.app.tar.gz
           node -e '
             const fs = require("fs");
             const [tag, sig, out] = process.argv.slice(1);
@@ -129,7 +129,7 @@ jobs:
               pub_date: new Date().toISOString(),
               platforms: { "darwin-aarch64": {
                 signature: fs.readFileSync(sig, "utf8").trim(),
-                url: `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${tag}/Humla.app.tar.gz`,
+                url: `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${tag}/Transcriberr.app.tar.gz`,
               } },
             }, null, 2));
           ' "$TAG" "$TARBALL.sig" "$BUNDLE/latest.json"

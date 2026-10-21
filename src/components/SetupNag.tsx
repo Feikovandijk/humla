@@ -76,7 +76,7 @@ export function SetupNag() {
     <button
       type="button"
       onClick={() => navigate("/onboarding")}
-      title={downloading ? "Model downloading — finish setup" : "Finish setting up Humla"}
+      title={downloading ? "Model downloading — finish setup" : "Finish setting up Transcriberr"}
       className="no-drag mt-1 flex items-center gap-2.5 px-2.5 py-2 rounded-[var(--radius)] text-[13px] font-medium transition-colors"
       style={{
         color: "var(--color-warning-text)",

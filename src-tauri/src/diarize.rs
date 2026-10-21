@@ -342,12 +342,12 @@ pub async fn recheck(app: &AppHandle, engine: Engine) -> Result<()> {
 /// The toast for a run that fell back from `failed` to `used`.
 pub fn fell_back_message(failed: Engine, used: Engine, reason: &str) -> String {
     let recheck = if failed.has_warm_marker() {
-        format!(" Humla is checking {} again in the background.", failed.label())
+        format!(" Transcriberr is checking {} again in the background.", failed.label())
     } else {
         String::new()
     };
     format!(
-        "{} failed on this Mac ({reason}), so speakers were identified with {} instead, and will be until Humla restarts.{recheck}",
+        "{} failed on this Mac ({reason}), so speakers were identified with {} instead, and will be until Transcriberr restarts.{recheck}",
         failed.label(),
         used.label()
     )
@@ -1315,13 +1315,13 @@ mod tests {
         assert_eq!(
             fell_back_message(Engine::Nemotron3, Engine::Community1, "Output backing is not compatible"),
             "Nemotron 3 failed on this Mac (Output backing is not compatible), so speakers were \
-             identified with Community-1 instead, and will be until Humla restarts. Humla is \
+             identified with Community-1 instead, and will be until Transcriberr restarts. Transcriberr is \
              checking Nemotron 3 again in the background."
         );
         assert_eq!(
             fell_back_message(Engine::Community1, Engine::Nemotron3, "boom"),
             "Community-1 failed on this Mac (boom), so speakers were identified with Nemotron 3 \
-             instead, and will be until Humla restarts."
+             instead, and will be until Transcriberr restarts."
         );
     }
 

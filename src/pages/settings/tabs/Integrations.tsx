@@ -84,7 +84,7 @@ export function IntegrationsSection({
           <Row label="Anything else">
             <p className="text-xs text-[var(--color-text-muted)]">
               Any MCP client that speaks stdio can run this command directly. It
-              works whether or not Humla is open, and reads whichever workspace
+              works whether or not Transcriberr is open, and reads whichever workspace
               you're currently in.
             </p>
           </Row>

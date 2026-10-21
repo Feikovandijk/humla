@@ -88,7 +88,7 @@ fi
 # The DMG's filename carries the version; only the arch suffix varies
 # (aarch64 / x64), so glob that much and insist on exactly one match.
 shopt -s nullglob
-DMG_MATCHES=(src-tauri/target/release/bundle/dmg/Humla_"${VERSION}"_*.dmg)
+DMG_MATCHES=(src-tauri/target/release/bundle/dmg/Transcriberr_"${VERSION}"_*.dmg)
 shopt -u nullglob
 if (( ${#DMG_MATCHES[@]} != 1 )); then
   echo "error: expected exactly one DMG named for $VERSION, found ${#DMG_MATCHES[@]}" >&2
@@ -98,10 +98,10 @@ if (( ${#DMG_MATCHES[@]} != 1 )); then
 fi
 DMG="${DMG_MATCHES[0]}"
 
-# The updater tarball's name carries NO version — `Humla.app.tar.gz`, release
+# The updater tarball's name carries NO version — `Transcriberr.app.tar.gz`, release
 # after release — so its name proves nothing and its mtime is a guess. Read the
 # version out of the payload that is actually about to ship.
-TARBALL="src-tauri/target/release/bundle/macos/Humla.app.tar.gz"
+TARBALL="src-tauri/target/release/bundle/macos/Transcriberr.app.tar.gz"
 SIG_FILE="$TARBALL.sig"
 
 for f in "$DMG" "$TARBALL" "$SIG_FILE"; do
@@ -112,7 +112,7 @@ for f in "$DMG" "$TARBALL" "$SIG_FILE"; do
 done
 
 TARBALL_VERSION=$(
-  tar -xOzf "$TARBALL" "Humla.app/Contents/Info.plist" 2>/dev/null \
+  tar -xOzf "$TARBALL" "Transcriberr.app/Contents/Info.plist" 2>/dev/null \
     | plutil -extract CFBundleShortVersionString raw -o - -- - 2>/dev/null
 ) || true
 if [[ "$TARBALL_VERSION" != "$VERSION" ]]; then
@@ -206,7 +206,7 @@ gh release create "$TAG" \
   --title "$TAG" \
   --notes "Auto-generated release. Mac users on Apple Silicon: download the DMG, drag to Applications, right-click → Open on first launch.
 
-Existing installs will offer to auto-update from the menu (Humla → Check for Updates…)." \
+Existing installs will offer to auto-update from the menu (Transcriberr → Check for Updates…)." \
   "$DMG" \
   "$TARBALL" \
   "$SIG_FILE" \

@@ -118,7 +118,7 @@ export function DoneStep({ ctx }: { ctx: StepContext }) {
     <StepShell
       icon={<Check size={26} strokeWidth={1.9} />}
       title="You're all set"
-      subtitle="Here's how Humla is configured. Anything can be changed later in Settings — click a row to adjust it now."
+      subtitle="Here's how Transcriberr is configured. Anything can be changed later in Settings — click a row to adjust it now."
     >
       <div className="w-full max-w-md flex flex-col gap-2 text-left">
         {/* Microphone — required; the only row that reads as a gap when unmet. */}

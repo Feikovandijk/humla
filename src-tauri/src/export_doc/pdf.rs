@@ -541,7 +541,7 @@ pub fn render_pdf(title: &str, sections: &[Section]) -> Result<Vec<u8>, String> 
     let fonts = Fonts::new()?;
     let pages = layout(&fonts, title, sections);
     let mut doc = Document::new();
-    doc.set_metadata(Metadata::new().title(title.to_string()).creator("Humla".to_string()));
+    doc.set_metadata(Metadata::new().title(title.to_string()).creator("Transcriberr".to_string()));
     let count = pages.len();
     for (i, ops) in pages.iter().enumerate() {
         let settings = PageSettings::from_wh(PAGE_W, PAGE_H).ok_or("page size")?;

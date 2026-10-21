@@ -87,7 +87,7 @@ export function Updater() {
           <div>
             <div className="font-medium mb-1">Update available</div>
             <div className="text-[var(--color-text-muted)] mb-3">
-              Humla {phase.update.version} is ready to install.
+              Transcriberr {phase.update.version} is ready to install.
             </div>
             <div className="flex gap-2">
               <button
@@ -112,7 +112,7 @@ export function Updater() {
           </div>
         )}
         {phase.kind === "installing" && (
-          <div className="text-[var(--color-text)]">Installing — restarting Humla…</div>
+          <div className="text-[var(--color-text)]">Installing — restarting Transcriberr…</div>
         )}
         {phase.kind === "error" && (
           <div>
