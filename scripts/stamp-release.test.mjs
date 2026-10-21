@@ -21,7 +21,10 @@ test("stamps the one next entry and leaves the others alone", () => {
     entry("0.70.1", "2026-10-21") + entry("0.70.0", "2026-10-20"),
   );
 });
-test("refuses a release without notes, or with two candidates", () => {
-  assert.throws(() => stampNextRelease(entry("0.70.0", "2026-10-20"), "0.70.1", "2026-10-21"), /found 0/);
+test("releases without notes when there is no next entry", () => {
+  const src = entry("0.70.0", "2026-10-20");
+  assert.equal(stampNextRelease(src, "0.70.1", "2026-10-21"), src);
+});
+test("refuses two next candidates", () => {
   assert.throws(() => stampNextRelease(entry("next", "") + entry("next", ""), "0.70.1", "2026-10-21"), /found 2/);
 });
