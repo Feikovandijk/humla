@@ -815,7 +815,7 @@ function titleCase(writing: boolean, title: string): Scenario {
     ),
     render: () => (
       <>
-        <NoteTitleBox title={title} onChange={() => {}} writing={writing} />
+        <NoteTitleBox title={title} onChange={() => {}} writing={writing} onGenerate={() => {}} canGenerate />
         {/* The meta row is the thing that must not move. */}
         <div className="mb-8 pb-4 border-b border-[var(--color-line)]">
           <div className="flex flex-wrap items-center gap-1 -mx-2">

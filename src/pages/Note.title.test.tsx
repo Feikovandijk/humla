@@ -18,7 +18,7 @@ beforeAll(() => mockLayoutBox());
 // The stores are module singletons, so a note left mid-titling by one test is
 // still mid-titling in the next.
 beforeEach(() => {
-  useRecordingStore.setState({ titling: {} });
+  useRecordingStore.setState({ errors: [], titling: {}, transcribing: {}, status: { phase: "idle", noteId: null } });
 });
 
 const TIMESTAMP = "Recording 19 Aug 14:32";
@@ -69,6 +69,58 @@ describe("a title generated while its note is open", () => {
 
     await new Promise((r) => setTimeout(r, 20));
     expect(titleBox()).toHaveValue("Mine");
+  });
+});
+
+describe("the generate button beside the title", () => {
+  it("saves pending edits before replacing a user-owned title", async () => {
+    const note = makeNote({ id: "n1", title: "Mine", transcript: "Hege: launch plan" });
+    let finishSave!: () => void;
+    const saved = new Promise<void>((resolve) => { finishSave = resolve; });
+    const generate = vi.fn(() => "Kickoff with Hege");
+    const update = vi.fn(() => saved);
+    open(note, { note_generate_title: generate, notes_update: update });
+    await waitFor(() => expect(titleBox()).toHaveValue("Mine"));
+
+    await userEvent.type(titleBox(), " today");
+    await userEvent.click(screen.getByRole("button", { name: "Generate title" }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith({ id: "n1", patch: expect.objectContaining({ title: "Mine today" }) }));
+    expect(generate).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Generate title" })).toBeDisabled();
+    finishSave();
+
+    await waitFor(() => expect(titleBox()).toHaveValue("Kickoff with Hege"));
+    expect(generate).toHaveBeenCalledWith({ noteId: "n1", force: true });
+  });
+
+  it("keeps the title and reports the error if saving fails", async () => {
+    open(makeNote({ id: "n1", title: "Mine", transcript: "Launch plan" }), {
+      notes_update: () => { throw new Error("Could not save edits"); },
+      note_generate_title: () => "Wrong title",
+    });
+    await waitFor(() => expect(titleBox()).toHaveValue("Mine"));
+    await userEvent.type(titleBox(), " today");
+    await userEvent.click(screen.getByRole("button", { name: "Generate title" }));
+    expect(await screen.findByText(/Could not save edits/)).toBeInTheDocument();
+    expect(titleBox()).toHaveValue("Mine today");
+    expect(screen.getByRole("button", { name: "Generate title" })).toBeEnabled();
+  });
+
+  it("is disabled when there is no content", async () => {
+    open(makeNote({ id: "n1", title: "Mine" }));
+    await waitFor(() => expect(titleBox()).toHaveValue("Mine"));
+    expect(screen.getByRole("button", { name: "Generate title" })).toBeDisabled();
+  });
+
+  it.each(["titling", "recording", "transcribing"])("is disabled while %s", async (state) => {
+    open(makeNote({ id: "n1", title: "Mine", transcript: "Launch plan" }));
+    await waitFor(() => expect(titleBox()).toHaveValue("Mine"));
+    act(() => {
+      if (state === "titling") useRecordingStore.getState().setTitling("n1", true);
+      if (state === "recording") useRecordingStore.getState().setStatus({ phase: "recording", noteId: "n1" });
+      if (state === "transcribing") useRecordingStore.getState().setTranscribing("n1", true);
+    });
+    expect(screen.getByRole("button", { name: "Generate title" })).toBeDisabled();
   });
 });
 

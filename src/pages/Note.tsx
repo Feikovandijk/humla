@@ -197,10 +197,14 @@ export function NoteTitleBox({
   title,
   onChange,
   writing,
+  onGenerate,
+  canGenerate,
 }: {
   title: string;
   onChange: (value: string) => void;
   writing: boolean;
+  onGenerate: () => void;
+  canGenerate: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
 
@@ -240,32 +244,43 @@ export function NoteTitleBox({
     return () => ro.disconnect();
   }, [fit, writing]);
 
-  if (writing) {
-    return (
-      <div className="nd-title mb-4 relative" role="status" aria-label="Writing a title">
-        <span className="invisible">&nbsp;</span>
-        <span className="skeleton absolute left-0 top-[0.2em] bottom-[0.2em] w-[55%]" />
-      </div>
-    );
-  }
   return (
-    <textarea
-      ref={ref}
-      value={title}
-      onChange={(e) => onChange(e.target.value)}
-      onKeyDown={(e) => {
-        // Block Enter so the title behaves like a single-line conceptual field —
-        // text still wraps when wider than the column, but the user can't
-        // accidentally introduce a literal newline.
-        if (e.key === "Enter") {
-          e.preventDefault();
-          (e.currentTarget as HTMLTextAreaElement).blur();
-        }
-      }}
-      placeholder="New note"
-      rows={1}
-      className="nd-bare nd-title block w-full mb-4 placeholder:text-[var(--color-text-muted)]/50 resize-none overflow-hidden focus:outline-none"
-    />
+    <div className="flex items-start gap-2 mb-4">
+      {writing ? (
+        <div className="nd-title flex-1 min-w-0 relative" role="status" aria-label="Writing a title">
+          <span className="invisible">&nbsp;</span>
+          <span className="skeleton absolute left-0 top-[0.2em] bottom-[0.2em] w-[55%]" />
+        </div>
+      ) : (
+        <textarea
+          ref={ref}
+          value={title}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            // Block Enter so the title behaves like a single-line conceptual field —
+            // text still wraps when wider than the column, but the user can't
+            // accidentally introduce a literal newline.
+            if (e.key === "Enter") {
+              e.preventDefault();
+              (e.currentTarget as HTMLTextAreaElement).blur();
+            }
+          }}
+          placeholder="New note"
+          rows={1}
+          className="nd-bare nd-title block flex-1 min-w-0 placeholder:text-[var(--color-text-muted)]/50 resize-none overflow-hidden focus:outline-none"
+        />
+      )}
+      <button
+        type="button"
+        className="nd-btn-icon disabled:opacity-50 disabled:cursor-not-allowed"
+        aria-label="Generate title"
+        title="Generate title"
+        onClick={onGenerate}
+        disabled={!canGenerate || writing}
+      >
+        <Sparkles size={16} strokeWidth={1.6} />
+      </button>
+    </div>
   );
 }
 
@@ -326,6 +341,7 @@ export function Note() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [revisions, setRevisions] = useState<NoteRevision[]>([]);
   const [restoreNonce, setRestoreNonce] = useState(0);
+  const [titleRequested, setTitleRequested] = useState(false);
   const [uiLang, setUiLang] = useState<string>("en");
   const globalProvider = useLiveSetting("summary_provider") || "local";
   // Device-wide audio retention (#24). Off is the shipped default, so an
@@ -547,10 +563,8 @@ export function Note() {
   // so summarising one note can't clobber another note's recording
   // state in the shared `recording_status` slot.
   const isSummarizing = useRecordingStore((s) => !!draft && !!s.summarizing[draft.id]);
-  // A title call is in flight for this note (#90) — from the post-stop chain or
-  // from ⋯ → Regenerate title; the backend brackets both with the same event,
-  // so there is nothing local to keep in step.
-  const isTitling = useRecordingStore((s) => !!draft && !!s.titling[draft.id]);
+  // Include the save before a manual request, before title_status arrives.
+  const isTitling = useRecordingStore((s) => !!draft && !!s.titling[draft.id]) || titleRequested;
   // A deferred transcription is replaying this note's retained audio (#146).
   // Its own channel, like summary and title: a live recording on another note
   // may be running the whole time, and this must not read as one.
@@ -855,22 +869,23 @@ export function Note() {
     [queueSave],
   );
 
-  // ⋯ → Regenerate title (#90). The title box goes read-only and dims while the
-  // model works — the menu closes on select, so that is the only place a busy
-  // state can actually be seen, and it is where the user is already looking.
-  //
-  // Adopting the result bypasses shouldAdoptRemoteTitle deliberately: that guard
-  // refuses to overwrite a user-owned title, and here the user asked for exactly
-  // that. The backend has already persisted it, so this only catches the draft up
-  // — and drops any queued rename, which the user has just superseded.
-  const regenerateTitle = useCallback(() => {
+  // Explicit generation may replace a user-owned title. Flush first so the
+  // backend reads the content on screen and no queued rename overwrites it.
+  const regenerateTitle = useCallback(async () => {
     const cur = draftRef.current;
-    if (!cur) return;
-    void runGenerateTitle(cur.id, (title) => {
-      delete pendingChanges.current.title;
-      setDraft((d) => (d ? { ...d, title } : d));
-    });
-  }, []);
+    if (!cur || isTitling) return;
+    setTitleRequested(true);
+    try {
+      await flushSave();
+      await runGenerateTitle(cur.id, (title) => {
+        setDraft((d) => (d ? { ...d, title } : d));
+      });
+    } catch (e) {
+      useRecordingStore.getState().pushError({ noteId: cur.id, kind: "title", message: String(e) });
+    } finally {
+      setTitleRequested(false);
+    }
+  }, [flushSave, isTitling]);
 
   // Empty-string-as-null for summary_provider. "" clears the override and
   // lets the global setting kick in; "openai" / "local" sets it explicitly.
@@ -966,6 +981,10 @@ export function Note() {
 
   if (!draft) return null;
 
+  const canGenerateTitle =
+    !recActive && !isTranscribing &&
+    (htmlToText(draft.body).trim() !== "" ||
+      draft.transcript.trim() !== "" || draft.summary.trim() !== "");
   const hasSummary = draft.summary.trim().length > 0;
   const hasTranscript = draft.transcript.trim().length > 0;
   // Live-feed alignment: while a recording is in flight, pin the
@@ -1031,6 +1050,8 @@ export function Note() {
           title={draft.title}
           onChange={(v) => patch("title", v)}
           writing={isTitling}
+          onGenerate={regenerateTitle}
+          canGenerate={canGenerateTitle}
         />
 
         <div className="mb-8 pb-4 border-b border-[var(--color-line)]">
