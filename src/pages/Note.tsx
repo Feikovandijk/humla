@@ -13,6 +13,7 @@ import {
   Circle,
   Cloud,
   Copy,
+  Download,
   Eraser,
   FileText,
   Folder,
@@ -64,7 +65,8 @@ import type { LayoutOutletContext } from "../components/Layout";
 import { SkeletonLines } from "../components/Skeleton";
 import { NoteEditor } from "../components/Editor";
 import { ContextMenu, ContextMenuItem } from "../components/ContextMenu";
-import { ExportModal } from "./ExportModal";
+import { ExportModal, slug } from "./ExportModal";
+import { save } from "@tauri-apps/plugin-dialog";
 import { SendToWebhookModal } from "./SendToWebhookModal";
 import { useWebhookSends } from "../lib/webhook";
 import { SUMMARY_PRESETS, presetLabel } from "../lib/presets";
@@ -1459,7 +1461,7 @@ export function Note() {
                 {!recActive && (!hasTranscript || timeline.length === 0 || !timelineCoversTranscript) &&
                   (!!playbackUrl || sessions.some((s) => s.hasPlayback)) && (
                     <TranscriptPlayer
-                      noteId={draft.id} timeline={[]} setTimeline={setTimeline}
+                      noteId={draft.id} title={draft.title} timeline={[]} setTimeline={setTimeline}
                       sessions={sessions} fallbackPlaybackUrl={playbackUrl}
                       audioAvailable keepAudio={keepAudio} disabled={false}
                       bottomAligned={false}
@@ -1552,6 +1554,7 @@ export function Note() {
                     ) : timeline.length > 0 ? (
                       <TranscriptPlayer
                         noteId={draft.id}
+                        title={draft.title}
                         timeline={timeline}
                         setTimeline={setTimeline}
                         sessions={sessions}
@@ -2713,6 +2716,7 @@ const TranscriptView = memo(function TranscriptView({
 // Exported for unit tests (session-switch seek behaviour, BUG A/B).
 export const TranscriptPlayer = memo(function TranscriptPlayer({
   noteId,
+  title,
   timeline,
   setTimeline,
   sessions,
@@ -2724,6 +2728,8 @@ export const TranscriptPlayer = memo(function TranscriptPlayer({
   bottomAligned,
 }: {
   noteId: string;
+  // Names the exported WAV's file.
+  title: string;
   timeline: TimelineEntry[];
   setTimeline: React.Dispatch<React.SetStateAction<TimelineEntry[]>>;
   // Recording sessions (#16) in order. One <audio> element plays the
@@ -3208,6 +3214,20 @@ export const TranscriptPlayer = memo(function TranscriptPlayer({
     }
   }
 
+  // Export what the player plays: the active take's mixed playback.wav.
+  const activeSession = sessions.find((s) => s.id === activeSessionId);
+  async function exportPlayback(session: NoteSession) {
+    try {
+      const path = await save({
+        defaultPath: `${slug(title)}-recording-${session.index}.wav`,
+        filters: [{ name: "WAV audio", extensions: ["wav"] }],
+      });
+      if (path) await ipc.exportRecordingAudio(noteId, session.id, "playback", path);
+    } catch (e) {
+      useRecordingStore.getState().pushError({ noteId, message: String(e), kind: "export" });
+    }
+  }
+
   return (
     <div className={fill ? "flex flex-col min-h-0 flex-1" : undefined}>
       <div className={cn(fill && "shrink-0")}>
@@ -3223,6 +3243,7 @@ export const TranscriptPlayer = memo(function TranscriptPlayer({
             is reads as nagging. The greyed re-diarize control's tooltip still
             names it, for the case where someone wants the capability back. */}
         {audioAvailable ? (
+          <>
           <audio
             ref={audioRef}
             src={activeUrl ?? undefined}
@@ -3235,6 +3256,18 @@ export const TranscriptPlayer = memo(function TranscriptPlayer({
             preload="auto"
             className="flex-1 h-8"
           />
+          {activeSession?.hasPlayback && (
+            <button
+              type="button"
+              onClick={() => void exportPlayback(activeSession)}
+              title="Export audio of this recording"
+              aria-label="Export audio of this recording"
+              className="nd-btn-icon nd-btn-icon-sm"
+            >
+              <Download size={15} strokeWidth={1.6} />
+            </button>
+          )}
+          </>
         ) : (
           <p className="flex-1 text-xs text-[var(--color-text-muted)]">
             {keepAudio

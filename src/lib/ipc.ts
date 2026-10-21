@@ -504,7 +504,8 @@ export const ipc = {
   // Write a note's selected content to the chosen path as one combined file.
   noteRecordingAudio: (noteId: string) =>
     invoke<RecordingAudio[]>("note_recording_audio", { noteId }),
-  exportRecordingAudio: (noteId: string, sessionId: string, source: RecordingAudio["source"], path: string) =>
+  // "playback" is the take's mixed playback.wav — what the note's player plays.
+  exportRecordingAudio: (noteId: string, sessionId: string, source: RecordingAudio["source"] | "playback", path: string) =>
     invoke<void>("export_recording_audio", { noteId, sessionId, source, path }),
 
   exportNote: (noteId: string, spec: ExportSpec) =>
