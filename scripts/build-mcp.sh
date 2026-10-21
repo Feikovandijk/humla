@@ -39,7 +39,8 @@ fi
 
 # Extra arguments go to cargo. Release packaging passes `--features custom-protocol`,
 # the feature `tauri build` turns on, so the app build reuses this compile instead
-# of rebuilding tauri, wry and the humla crate under a different feature set.
+# of rebuilding tauri, wry and the humla crate under a different feature set. That
+# feature embeds the frontend, so run `pnpm build` first or `dist/` is missing.
 (
   cd src-tauri
   cargo build --release --bin humla-mcp "$@"
