@@ -81,6 +81,7 @@ jobs:
           ./scripts/build-sidecar.sh
           ./scripts/build-diarize.sh
           ./scripts/build-metallib.sh
+          pnpm build  # custom-protocol embeds dist/, so it has to exist first
           ./scripts/build-mcp.sh --features custom-protocol
 
       # shortcut: ad-hoc signed, no notarisation; add the Developer ID + notarytool secrets
