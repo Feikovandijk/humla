@@ -149,6 +149,24 @@ pub fn open(path: &Path) -> Result<Connection> {
             value TEXT NOT NULL
         );
 
+        -- Anytype sync: which Anytype object a note was pushed to, and when.
+        -- The object itself lives in Anytype; Humla never reads it back
+        -- (ADR 0007), so the row is a one-way mapping plus the fingerprint of
+        -- what was last sent, never a copy. The row survives the note's trip
+        -- to the Trash so a restore updates the same object, and goes only
+        -- when the note is purged (`purge_note`). Deleting the note never
+        -- deletes the Anytype object.
+        CREATE TABLE IF NOT EXISTS anytype_links (
+            note_id           TEXT PRIMARY KEY,
+            object_id         TEXT NOT NULL DEFAULT '',
+            space_id          TEXT NOT NULL DEFAULT '',
+            doc_hash          TEXT NOT NULL DEFAULT '',
+            synced_updated_at INTEGER NOT NULL DEFAULT 0,
+            synced_at         INTEGER NOT NULL DEFAULT 0,
+            confirmed         INTEGER NOT NULL DEFAULT 0,
+            last_error        TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS summary_prompts (
             id          TEXT PRIMARY KEY,
             name        TEXT NOT NULL,
@@ -1002,6 +1020,10 @@ pub fn purge_note(conn: &Connection, id: &str) -> Result<()> {
     // cannot be deleted per note. It stores a vector, not text, so it holds no name.
     remove_note_chunks(conn, id)?;
     conn.execute("DELETE FROM note_revisions WHERE note_id = ?1", params![id])?;
+    // The Anytype mapping goes with the note (the object itself stays in
+    // Anytype — deleting it from under the user's knowledge base is theirs
+    // to do, not ours).
+    conn.execute("DELETE FROM anytype_links WHERE note_id = ?1", params![id])?;
     conn.execute("DELETE FROM notes WHERE id = ?1", params![id])?;
     Ok(())
 }
@@ -1012,6 +1034,90 @@ pub fn note_exists(conn: &Connection, id: &str) -> Result<bool> {
         .query_row("SELECT 1 FROM notes WHERE id = ?1", params![id], |_| Ok(()))
         .optional()?
         .is_some())
+}
+
+/// The Anytype sync mapping for one note (ADR 0007). `doc_hash` +
+/// `synced_updated_at` say whether what Anytype holds is still what the note
+/// holds; `confirmed` records that the user saw where this note goes and
+/// chose not to be asked again.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnytypeLink {
+    pub note_id: String,
+    pub object_id: String,
+    pub space_id: String,
+    pub doc_hash: String,
+    pub synced_updated_at: i64,
+    pub synced_at: i64,
+    pub confirmed: bool,
+    pub last_error: Option<String>,
+}
+
+fn anytype_link_from_row(row: &rusqlite::Row) -> rusqlite::Result<AnytypeLink> {
+    Ok(AnytypeLink {
+        note_id: row.get(0)?,
+        object_id: row.get(1)?,
+        space_id: row.get(2)?,
+        doc_hash: row.get(3)?,
+        synced_updated_at: row.get(4)?,
+        synced_at: row.get(5)?,
+        confirmed: row.get::<_, i64>(6)? != 0,
+        last_error: row.get(7)?,
+    })
+}
+
+const ANYTYPE_LINK_COLS: &str =
+    "note_id, object_id, space_id, doc_hash, synced_updated_at, synced_at, confirmed, last_error";
+
+pub fn anytype_link_get(conn: &Connection, note_id: &str) -> Result<Option<AnytypeLink>> {
+    Ok(conn
+        .query_row(
+            &format!("SELECT {ANYTYPE_LINK_COLS} FROM anytype_links WHERE note_id = ?1"),
+            params![note_id],
+            anytype_link_from_row,
+        )
+        .optional()?)
+}
+
+pub fn anytype_link_upsert(conn: &Connection, link: &AnytypeLink) -> Result<()> {
+    conn.execute(
+        "INSERT INTO anytype_links (note_id, object_id, space_id, doc_hash, synced_updated_at, synced_at, confirmed, last_error)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(note_id) DO UPDATE SET
+           object_id = excluded.object_id,
+           space_id = excluded.space_id,
+           doc_hash = excluded.doc_hash,
+           synced_updated_at = excluded.synced_updated_at,
+           synced_at = excluded.synced_at,
+           confirmed = excluded.confirmed,
+           last_error = excluded.last_error",
+        params![
+            link.note_id,
+            link.object_id,
+            link.space_id,
+            link.doc_hash,
+            link.synced_updated_at,
+            link.synced_at,
+            link.confirmed as i64,
+            link.last_error,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Record a failed sync without touching the rest of the mapping. A note that
+/// was never pushed has no row to update — its failure is reported, not stored.
+pub fn anytype_link_set_error(conn: &Connection, note_id: &str, error: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE anytype_links SET last_error = ?2 WHERE note_id = ?1",
+        params![note_id, error],
+    )?;
+    Ok(())
+}
+
+pub fn anytype_link_delete(conn: &Connection, note_id: &str) -> Result<()> {
+    conn.execute("DELETE FROM anytype_links WHERE note_id = ?1", params![note_id])?;
+    Ok(())
 }
 
 pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
@@ -3227,6 +3333,75 @@ mod tests {
             get_note(&conn, &note.id).unwrap().detected_language.as_deref(),
             Some("en")
         );
+    }
+
+    /// Anytype sync (ADR 0007): the link row round-trips, a failed push leaves
+    /// a readable error without touching the mapping, and purging the note
+    /// takes its mapping with it — the object in Anytype is the user's to
+    /// delete, not ours.
+    #[test]
+    fn anytype_link_round_trips_and_purges_with_the_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open(&dir.path().join("anytype.sqlite")).unwrap();
+        let note = create_note(&conn, "en", "meeting", "").unwrap();
+
+        assert!(anytype_link_get(&conn, &note.id).unwrap().is_none());
+
+        anytype_link_upsert(&conn, &AnytypeLink {
+            note_id: note.id.clone(),
+            object_id: "obj-1".into(),
+            space_id: "space-1".into(),
+            doc_hash: "abc".into(),
+            synced_updated_at: 100,
+            synced_at: 200,
+            confirmed: false,
+            last_error: None,
+        })
+        .unwrap();
+        let link = anytype_link_get(&conn, &note.id).unwrap().unwrap();
+        assert_eq!(link.object_id, "obj-1");
+        assert!(!link.confirmed);
+
+        // A failed push records the error and keeps the mapping.
+        anytype_link_set_error(&conn, &note.id, "Anytype isn’t running.").unwrap();
+        let link = anytype_link_get(&conn, &note.id).unwrap().unwrap();
+        assert_eq!(link.last_error.as_deref(), Some("Anytype isn’t running."));
+        assert_eq!(link.object_id, "obj-1");
+
+        // A successful re-push clears the error and moves the fingerprint.
+        anytype_link_upsert(&conn, &AnytypeLink {
+            doc_hash: "def".into(),
+            synced_updated_at: 300,
+            synced_at: 400,
+            confirmed: true,
+            last_error: None,
+            ..link
+        })
+        .unwrap();
+        let link = anytype_link_get(&conn, &note.id).unwrap().unwrap();
+        assert_eq!(link.doc_hash, "def");
+        assert!(link.confirmed);
+        assert!(link.last_error.is_none());
+
+        // Unlink forgets the mapping; the note itself is untouched.
+        anytype_link_delete(&conn, &note.id).unwrap();
+        assert!(anytype_link_get(&conn, &note.id).unwrap().is_none());
+        assert!(note_exists(&conn, &note.id).unwrap());
+
+        // Purge takes the mapping with the note.
+        anytype_link_upsert(&conn, &AnytypeLink {
+            note_id: note.id.clone(),
+            object_id: "obj-1".into(),
+            space_id: "space-1".into(),
+            doc_hash: "abc".into(),
+            synced_updated_at: 100,
+            synced_at: 200,
+            confirmed: true,
+            last_error: None,
+        })
+        .unwrap();
+        purge_note(&conn, &note.id).unwrap();
+        assert!(anytype_link_get(&conn, &note.id).unwrap().is_none());
     }
 
     /// Writing derived data must not advance the note's last-write-wins

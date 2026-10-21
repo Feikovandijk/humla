@@ -19,6 +19,7 @@ use tokio::sync::Semaphore;
 // Shared helpers + constants (err, DEFAULT_*, emit_*, key/config readers,
 // transcript post-processing) stay in this root module and are reached from
 // submodules via `super::` / `crate::`.
+mod anytype;
 mod api_keys;
 mod assets;
 mod chat;
@@ -38,6 +39,7 @@ mod summary_prompts;
 mod title;
 mod transcription_config;
 mod webhook;
+pub use anytype::*;
 pub use api_keys::*;
 pub use assets::*;
 pub use chat::*;
@@ -112,7 +114,7 @@ pub(crate) const TITLE_FALLBACK_MODEL: &str = "gpt-4o-mini";
 // Ollama's default port + OpenAI-compat path. Any user running LM Studio,
 // llama-server, or vLLM will override this in Settings.
 const DEFAULT_LOCAL_LLM_BASE_URL: &str = "http://localhost:11434/v1";
-fn err<E: std::fmt::Display>(e: E) -> String { e.to_string() }
+pub(crate) fn err<E: std::fmt::Display>(e: E) -> String { e.to_string() }
 
 /// Re-run diarization on a note's saved audio with the current settings,
 /// then rebuild and write back the labelled transcript. Lets the user

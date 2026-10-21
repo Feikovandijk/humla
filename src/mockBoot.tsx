@@ -34,6 +34,7 @@ import { Toggle } from "./pages/settings/components/Toggle";
 import { NoteTitleBox, NoteToolbar, PanelEmpty, TranscriptEditor, TranscriptPlayer } from "./pages/Note";
 import { IntegrationsSection } from "./pages/settings/tabs/Integrations";
 import { SendToWebhookModal } from "./pages/SendToWebhookModal";
+import { SyncToAnytypeModal } from "./pages/SyncToAnytypeModal";
 import { ExportModal } from "./pages/ExportModal";
 import { ChatTab } from "./pages/settings/tabs/Chat";
 import { RecordingSection } from "./pages/settings/tabs/Recording";
@@ -409,10 +410,12 @@ const settingsWrap: Scenario["wrap"] = (node) => (
 //
 // #213 adds the webhook rows to the same section. `webhook` turns them on with
 // a saved endpoint, so the stored header reads as a name over an empty value.
-function integrationsCase(enabled: boolean, webhook = false): Scenario {
+// ADR 0007's Anytype rows ride along the same way; `anytype` turns them on
+// with a saved key and space, so the key field reads as "Saved".
+function integrationsCase(enabled: boolean, webhook = false, anytype = false): Scenario {
   return {
     wrap: settingsWrap,
-    render: () => <IntegrationsHarness mcp={enabled} webhook={webhook} />,
+    render: () => <IntegrationsHarness mcp={enabled} webhook={webhook} anytype={anytype} />,
     ipc: {
       mcp_server_path: () => "/Applications/Humla.app/Contents/MacOS/humla-mcp",
       webhook_get_endpoint: () => ({
@@ -420,15 +423,37 @@ function integrationsCase(enabled: boolean, webhook = false): Scenario {
         headers: ["Authorization"],
       }),
       webhook_set_endpoint: () => undefined,
+      anytype_config_get: () => ({
+        enabled: anytype,
+        hasKey: anytype,
+        spaceId: anytype ? "space-1" : "",
+        spaceName: anytype ? "Product" : "",
+        typeKey: anytype ? "page" : "",
+        baseUrl: "",
+      }),
+      anytype_list_types: () => [
+        { key: "page", name: "Page" },
+        { key: "note", name: "Note" },
+      ],
+      anytype_sync_state: () => null,
     },
   };
 }
 
-function IntegrationsHarness({ mcp, webhook }: { mcp: boolean; webhook: boolean }) {
+function IntegrationsHarness({
+  mcp,
+  webhook,
+  anytype,
+}: {
+  mcp: boolean;
+  webhook: boolean;
+  anytype: boolean;
+}) {
   const [s, setS] = useState({
     ...DEFAULTS,
     mcp_enabled: String(mcp),
     webhook_enabled: String(webhook),
+    anytype_enabled: String(anytype),
   } as Record<EditableKey, string>);
   return <IntegrationsSection s={s} update={(k, v) => setS((p) => ({ ...p, [k]: v }))} />;
 }
@@ -449,6 +474,28 @@ function webhookSendCase(destination: string | null): Scenario {
         return destination;
       },
       webhook_send_note: () => undefined,
+    },
+  };
+}
+
+// ---- ADR 0007: the confirmation before a note is first pushed to Anytype.
+// What needs eyes is the space name sitting in the sentence, the overwrite
+// rule under it, and the unset state's error with its way out to Settings.
+function anytypeSendCase(space: string | null): Scenario {
+  const note = makeNote({ id: "n1", title: "Weekly planning" });
+  return {
+    wrap: (node) => <MemoryRouter>{node}</MemoryRouter>,
+    render: () => (
+      <SyncToAnytypeModal note={note} open onClose={() => {}} flushEdits={async () => {}} />
+    ),
+    ipc: {
+      anytype_config_get: () => {
+        if (space === null) {
+          return { enabled: true, hasKey: true, spaceId: "", spaceName: "", typeKey: "", baseUrl: "" };
+        }
+        return { enabled: true, hasKey: true, spaceId: "space-1", spaceName: space, typeKey: "page", baseUrl: "" };
+      },
+      anytype_sync_note: () => ({ kind: "synced", recreated: false }),
     },
   };
 }
@@ -1148,6 +1195,11 @@ const CASES: Record<string, Scenario> = {
   "webhook-settings": integrationsCase(false, true),
   "webhook-send": webhookSendCase("hooks.example.com"),
   "webhook-send-unset": webhookSendCase(null),
+  // --- ADR 0007: the Anytype rows with a saved key and space, and the first
+  // push's confirmation.
+  "anytype-settings": integrationsCase(false, false, true),
+  "anytype-send": anytypeSendCase("Product"),
+  "anytype-send-unset": anytypeSendCase(null),
   export: exportCase(),
 
   // --- #147: the issue's exact report — recommended model already pulled.

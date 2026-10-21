@@ -39,7 +39,9 @@ pub struct ExportSpec {
 }
 
 /// A section's content, before it is rendered for a format.
-enum Content {
+/// `pub(crate)` so the Anytype document (`crate::anytype::doc`) assembles from
+/// the same sections the export does — one content contract, not two.
+pub(crate) enum Content {
     /// The summary, which the model writes as Markdown.
     Markdown(String),
     Transcript(String),
@@ -48,7 +50,7 @@ enum Content {
 }
 
 impl Content {
-    fn raw(&self) -> &str {
+    pub(crate) fn raw(&self) -> &str {
         match self {
             Content::Markdown(s) | Content::Transcript(s) | Content::Notes(s) => s,
         }
@@ -63,11 +65,11 @@ impl Content {
     }
 }
 
-fn display_title(title: &str) -> &str {
+pub(crate) fn display_title(title: &str) -> &str {
     if title.trim().is_empty() { "Untitled note" } else { title.trim() }
 }
 
-fn sections(summary: &str, transcript: &str, body_html: &str, spec: &ExportSpec) -> Vec<(&'static str, Content)> {
+pub(crate) fn sections(summary: &str, transcript: &str, body_html: &str, spec: &ExportSpec) -> Vec<(&'static str, Content)> {
     let mut out = Vec::new();
     if spec.include_summary {
         out.push(("Summary", Content::Markdown(summary.trim().to_string())));
@@ -94,7 +96,7 @@ fn sections(summary: &str, transcript: &str, body_html: &str, spec: &ExportSpec)
 
 /// Markdown uses ATX `#`/`##`; plain text underlines the text with `=`
 /// (title) or `-` (section) so the structure survives without markup.
-fn heading(markdown: bool, level: u8, text: &str) -> String {
+pub(crate) fn heading(markdown: bool, level: u8, text: &str) -> String {
     if markdown {
         return format!("{} {}", "#".repeat(level as usize), text);
     }

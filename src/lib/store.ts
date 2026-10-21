@@ -119,7 +119,7 @@ export type Flash = { id: number; message: string };
 
 /** What an error toast is about, which is what its heading says (`Toaster`).
  *  Omitted means "recording" — the channel the backend's own errors arrive on. */
-export type ErrorKind = "recording" | "summary" | "title" | "export" | "webhook";
+export type ErrorKind = "recording" | "summary" | "title" | "export" | "webhook" | "anytype";
 
 /**
  * How far a deferred transcription's replay has got (#146), as `transcribe_status`

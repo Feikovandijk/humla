@@ -62,6 +62,12 @@ export function mockTauri(
         return null;
       case "webhook_get_endpoint":
         return { url: "", headers: [] };
+      case "anytype_config_get":
+        return { enabled: false, hasKey: false, spaceId: "", spaceName: "", typeKey: "", baseUrl: "" };
+      case "anytype_status":
+        return { linked: false, confirmed: false, stale: false, syncing: false, syncedAt: null, lastError: null };
+      case "anytype_sync_state":
+        return null;
       case "anthropic_list_models":
       case "openai_list_models":
         return [];
