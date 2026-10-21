@@ -27,11 +27,11 @@ export function WelcomeStep({ ctx }: { ctx: StepContext }) {
     <div className="w-full max-w-xl flex flex-col items-center text-center">
       {/* Wordmark */}
       <div className="text-[32px] font-bold tracking-[-0.03em] text-[var(--color-text-display)]">
-        Humla
+        Transcriberr
       </div>
       {/* Value prop */}
       <p className="mt-3 text-[16px] leading-relaxed text-[var(--color-text-muted)] max-w-md">
-        Meeting notes that write themselves — you take notes, Humla records,
+        Meeting notes that write themselves — you take notes, Transcriberr records,
         transcribes, and summarizes alongside you.
       </p>
 

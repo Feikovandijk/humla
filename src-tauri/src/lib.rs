@@ -494,7 +494,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .config()
         .product_name
         .clone()
-        .unwrap_or_else(|| "Humla".to_string());
+        .unwrap_or_else(|| "Transcriberr".to_string());
 
     let about = PredefinedMenuItem::about(app, None, None)?;
     let check_for_updates = MenuItem::with_id(

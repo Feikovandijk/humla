@@ -89,7 +89,7 @@ export function RecordingSection({
       <Section title="Menu bar">
         <Row
           label="Open at login"
-          description="Humla starts in the menu bar when you log in, without opening its window. If you added Humla to Login Items in System Settings, remove it there."
+          description="Transcriberr starts in the menu bar when you log in, without opening its window. If you added Transcriberr to Login Items in System Settings, remove it there."
           control={<LaunchAtLoginField />}
         />
         <Row
@@ -99,8 +99,8 @@ export function RecordingSection({
           // rather than describing the switch.
           description={
             closeToTray
-              ? "Closing the window hides Humla in the menu bar and drops its Dock icon. Quit from the menu-bar icon."
-              : "Closing the window quits Humla. The menu-bar icon is still there while it runs."
+              ? "Closing the window hides Transcriberr in the menu bar and drops its Dock icon. Quit from the menu-bar icon."
+              : "Closing the window quits Transcriberr. The menu-bar icon is still there while it runs."
           }
           control={
             <Toggle

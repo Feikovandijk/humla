@@ -728,7 +728,7 @@ impl LiveCapture {
         }
         let note_id = self.note_id.clone().ok_or("not recording")?;
         if self.sink.language_pending() {
-            return Err("Choose English or Dutch in Humla before stopping the recording.");
+            return Err("Choose English or Dutch in Transcriberr before stopping the recording.");
         }
         self.stop = StopState::Draining;
         Ok(note_id)

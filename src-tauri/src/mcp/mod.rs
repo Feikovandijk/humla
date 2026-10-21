@@ -97,7 +97,7 @@ const BUNDLE_ID: &str = "no.humla.app";
 /// what it is used for: Claude Code defers tool schemas and decides from this string
 /// alone whether to go looking for the tools at all, and Codex reads it at
 /// initialization. Kept well under the 2 KB both clients truncate at.
-pub const INSTRUCTIONS: &str = "Humla is the user's meeting-notes app: every meeting \
+pub const INSTRUCTIONS: &str = "Transcriberr is the user's meeting-notes app: every meeting \
     they record becomes a note with their own typed notes, an AI summary, and a \
     speaker-labelled transcript of what was actually said.
 
@@ -128,7 +128,7 @@ pub fn is_enabled(conn: &Connection) -> bool {
 /// the client as broken, which is a worse answer than one that says plainly what
 /// the user has to do.
 pub fn disabled_message() -> String {
-    "Humla's MCP integration is turned off. The user can enable it in Humla → \
+    "Transcriberr's MCP integration is turned off. The user can enable it in Transcriberr → \
      Settings → General → Integrations. Nothing can be read until they do — tell \
      them that rather than trying another tool."
         .to_string()

@@ -184,7 +184,7 @@ export function Sidebar({ onCollapse }: { onCollapse: () => void }) {
       >
         <div className="no-drag flex items-center gap-2 select-none text-[var(--color-text)]">
           <HumlaMark size={18} />
-          <span className="text-[15px] font-semibold tracking-[-0.01em]">Humla</span>
+          <span className="text-[15px] font-semibold tracking-[-0.01em]">Transcriberr</span>
         </div>
         <button
           onClick={onCollapse}

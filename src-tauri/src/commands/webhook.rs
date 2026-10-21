@@ -139,7 +139,7 @@ fn validate(endpoint: &Endpoint) -> Result<(Url, HeaderMap), String> {
                 | "upgrade"
                 | "expect"
         ) {
-            return Err("Host, content type and transport headers are managed by Humla.".into());
+            return Err("Host, content type and transport headers are managed by Transcriberr.".into());
         }
         let mut value = HeaderValue::from_str(&header.value).map_err(|_| {
             "Header values cannot contain line breaks or invalid characters.".to_string()
@@ -350,7 +350,7 @@ async fn deliver(endpoint: &Endpoint, payload: &Value) -> Result<(), String> {
         .map_err(|_| "Could not encode the webhook JSON.".to_string())?;
     let payload_bytes = body.len();
     let client = reqwest::Client::builder()
-        .user_agent(concat!("Humla/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("Transcriberr/", env!("CARGO_PKG_VERSION")))
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
@@ -730,7 +730,7 @@ mod tests {
         assert!(headers.starts_with("post /hook?"));
         assert!(headers.contains("authorization: bearer test-token"));
         assert!(headers.contains("content-type: application/json"));
-        assert!(headers.contains("user-agent: humla/"));
+        assert!(headers.contains("user-agent: transcriberr/"));
         assert_eq!(serde_json::from_str::<Value>(body).unwrap(), payload);
     }
 

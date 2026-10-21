@@ -33,12 +33,12 @@ export function Home() {
           <div className="flex flex-col items-center gap-3">
             <img
               src={humlaIcon}
-              alt="Humla"
+              alt="Transcriberr"
               width={72}
               height={72}
               style={{ filter: "drop-shadow(0 6px 20px rgba(0, 0, 0, 0.16))" }}
             />
-            <h1 className="text-4xl font-semibold tracking-tight leading-none">Humla</h1>
+            <h1 className="text-4xl font-semibold tracking-tight leading-none">Transcriberr</h1>
           </div>
           <p className="text-sm text-[var(--color-text-muted)] tabular-nums">
             {notesLabel}, {summarized} summarized
