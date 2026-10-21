@@ -56,6 +56,7 @@ export const DEFAULTS: Record<EditableKey, string> = {
   silence_rms_threshold: "0.005",
   mcp_enabled: "false",
   webhook_enabled: "false",
+  anytype_enabled: "false",
 };
 
 export const PROVIDERS_BASE = [

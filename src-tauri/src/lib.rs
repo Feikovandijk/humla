@@ -19,6 +19,7 @@ mod stt;
 mod providers;
 mod chat;
 mod embed;
+mod anytype;
 // Public so the `humla-mcp` binary (#172) can drive it. Everything below it —
 // `db`, `html_text` — stays private to the crate.
 pub mod mcp;
@@ -81,6 +82,9 @@ pub struct AppState {
     /// keeps it for the app session. The sidecar exits on stdin EOF, which is
     /// also how the app's `_exit(0)` reaps it.
     pub parakeet: Arc<parakeet::ParakeetManager>,
+    /// The Anytype sync queue (ADR 0007): one paced worker behind every push,
+    /// per-note or bulk. Spawned once from `setup` via [`anytype::Queue::start`].
+    pub anytype: Arc<anytype::Queue>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -185,7 +189,11 @@ pub fn run() {
                 parakeet: Arc::new(parakeet::ParakeetManager::new(
                     diarize::sidecar_path(app.handle()).ok(),
                 )),
+                anytype: Arc::new(anytype::Queue::new()),
             });
+            // The Anytype sync worker reads AppState, so it starts after the
+            // state is managed, on Tauri's runtime (never bare tokio::spawn).
+            app.state::<AppState>().anytype.start(app.handle());
             let menu = build_menu(app.handle())?;
             app.set_menu(menu)?;
             app.on_menu_event(|app, event| {
@@ -339,6 +347,16 @@ pub fn run() {
             commands::webhook_set_endpoint,
             commands::webhook_destination,
             commands::webhook_send_note,
+            commands::anytype_config_get,
+            commands::anytype_config_set,
+            commands::anytype_check,
+            commands::anytype_list_types,
+            commands::anytype_status,
+            commands::anytype_sync_note,
+            commands::anytype_sync_all,
+            commands::anytype_sync_cancel,
+            commands::anytype_sync_state,
+            commands::anytype_unlink_note,
             commands::app_data_dir,
             commands::system_arch,
             commands::mcp_server_path,
