@@ -9,6 +9,7 @@ const HEADING: Record<ErrorKind, string> = {
   title: "Couldn’t write a title",
   export: "Export failed",
   webhook: "Couldn’t send to webhook",
+  anytype: "Couldn’t sync to Anytype",
 };
 
 export function Toaster() {

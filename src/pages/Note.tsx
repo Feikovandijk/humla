@@ -69,6 +69,8 @@ import { ExportModal, slug } from "./ExportModal";
 import { save } from "@tauri-apps/plugin-dialog";
 import { SendToWebhookModal } from "./SendToWebhookModal";
 import { useWebhookSends } from "../lib/webhook";
+import { SyncToAnytypeModal } from "./SyncToAnytypeModal";
+import { syncNoteToAnytype, useAnytypeStatus } from "../lib/anytype";
 import { SUMMARY_PRESETS, presetLabel } from "../lib/presets";
 import { LANGUAGES, languageOptionLabel } from "../lib/languages";
 import { useDeveloperMode } from "../lib/useDeveloperMode";
@@ -1781,6 +1783,24 @@ export function NoteToolbar({
   const webhookEnabled = useLiveSetting("webhook_enabled") === "true";
   const sendingToWebhook = useWebhookSends((s) => !!s.sending[noteId]);
   const [webhookOpen, setWebhookOpen] = useState(false);
+  // Anytype sync (ADR 0007) sits beside Send to webhook for the same reason:
+  // it is opt-in, and it is the same act — a note leaving the app. The
+  // confirmation asks until the user ticks "Don't ask again for this note",
+  // exactly like the webhook's, but with an opt-out.
+  const anytypeEnabled = useLiveSetting("anytype_enabled") === "true";
+  const anytypeStatus = useAnytypeStatus(noteId);
+  const [anytypeOpen, setAnytypeOpen] = useState(false);
+
+  function onSyncToAnytype() {
+    setMenuPos(null);
+    // Confirmed once (the modal's "don't ask again"): updates go straight
+    // through. Otherwise the modal names the space and the overwrite rule.
+    if (anytypeStatus?.confirmed) {
+      void syncNoteToAnytype(noteId, false, flushEdits);
+    } else {
+      setAnytypeOpen(true);
+    }
+  }
 
   async function record() {
     // The backend checks both offered languages and microphone permission.
@@ -1915,6 +1935,15 @@ export function NoteToolbar({
               {sendingToWebhook ? "Sending to webhook…" : "Send to webhook…"}
             </ContextMenuItem>
           )}
+          {note && anytypeEnabled && (
+            <ContextMenuItem disabled={anytypeStatus?.syncing} onClick={onSyncToAnytype}>
+              {anytypeStatus?.syncing
+                ? "Syncing to Anytype…"
+                : anytypeStatus?.linked
+                  ? "Update in Anytype…"
+                  : "Sync to Anytype…"}
+            </ContextMenuItem>
+          )}
           <ContextMenuItem
             disabled={!canRegenerateTitle}
             onClick={() => {
@@ -1942,6 +1971,14 @@ export function NoteToolbar({
           note={note}
           open={webhookOpen}
           onClose={() => setWebhookOpen(false)}
+          flushEdits={flushEdits}
+        />
+      )}
+      {note && (
+        <SyncToAnytypeModal
+          note={note}
+          open={anytypeOpen}
+          onClose={() => setAnytypeOpen(false)}
           flushEdits={flushEdits}
         />
       )}

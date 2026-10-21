@@ -101,6 +101,65 @@ export type WebhookEndpointInput = {
   headers: { name: string; value: string | null }[];
 };
 
+/** Anytype sync (ADR 0007): what Settings reads of the configuration. The API
+ *  key itself is never returned — `hasKey` is all the form can learn. */
+export type AnytypeConfig = {
+  enabled: boolean;
+  hasKey: boolean;
+  spaceId: string;
+  spaceName: string;
+  typeKey: string;
+  baseUrl: string;
+};
+
+/** What Settings saves. An absent `apiKey` keeps the stored key; an empty one
+ *  removes it. The other fields save when present. */
+export type AnytypeConfigInput = {
+  apiKey?: string | null;
+  spaceId?: string;
+  spaceName?: string;
+  typeKey?: string;
+  baseUrl?: string;
+};
+
+export type AnytypeSpace = { id: string; name: string };
+
+export type AnytypeObjectType = { key: string; name: string };
+
+/** Where one note stands with Anytype — mirror of the backend's `StatusView`. */
+export type AnytypeStatus = {
+  linked: boolean;
+  confirmed: boolean;
+  stale: boolean;
+  syncing: boolean;
+  syncedAt: number | null;
+  lastError: string | null;
+};
+
+/** What one push settled as — mirror of the backend's `SyncOutcome`. */
+export type AnytypeSyncOutcome =
+  | { kind: "synced"; recreated: boolean }
+  | { kind: "unchanged" };
+
+/** One `anytype_sync` event: `syncing` while the push runs, then the outcome. */
+export type AnytypeSyncEvent = {
+  noteId: string;
+  state: "syncing" | "synced" | "unchanged" | "failed";
+  message: string | null;
+  recreated: boolean;
+};
+
+/** One `anytype_bulk` event: progress per note, `finished` on the last. */
+export type AnytypeBulkEvent = {
+  done: number;
+  total: number;
+  finished: boolean;
+  cancelled: boolean;
+};
+
+/** A bulk run in flight — mirror of the backend's `BulkProgress`. */
+export type AnytypeBulkProgress = { done: number; total: number; cancelled: boolean };
+
 export type SettingsKey =
   | "language"
   | "default_summary_preset"
@@ -149,6 +208,10 @@ export type SettingsKey =
   // menu offers the send. The endpoint itself is a secret and lives in the
   // Keychain (`webhookGetEndpoint`), never in this table.
   | "webhook_enabled"
+  // Anytype sync (ADR 0007). Off until enabled; it decides whether a note's ⋯
+  // menu offers the sync. The API key is a secret and lives in the Keychain
+  // (`anytypeConfigGet` reports only `hasKey`), like the webhook's endpoint.
+  | "anytype_enabled"
   | "silence_rms_threshold"
   // Menu-bar mode (#21). `close_to_tray` off means the close button still
   // quits; on, it hides the window and drops the Dock icon so a tray- or
@@ -390,6 +453,31 @@ export const ipc = {
   /** POST the note as it is in the database. Flush the view's queued edits
    *  first (`flushEdits`), or the receiver gets an older copy. */
   webhookSendNote: (noteId: string) => invoke<void>("webhook_send_note", { noteId }),
+  // Anytype sync (ADR 0007). One explicit push per press; progress rides the
+  // `anytype_sync` / `anytype_bulk` events.
+  anytypeConfigGet: () => invoke<AnytypeConfig>("anytype_config_get"),
+  anytypeConfigSet: (input: AnytypeConfigInput) =>
+    invoke<void>("anytype_config_set", { input }),
+  /** The Settings form's "Test connection": list spaces with the key just
+   *  typed (`apiKey` given) or the saved one. */
+  anytypeCheck: (apiKey: string | null, baseUrl: string | null) =>
+    invoke<AnytypeSpace[]>("anytype_check", { apiKey, baseUrl }),
+  /** The saved space's object types, for the type picker. */
+  anytypeListTypes: () => invoke<AnytypeObjectType[]>("anytype_list_types"),
+  /** Where one note stands with Anytype. Local read — no network. */
+  anytypeStatus: (noteId: string) => invoke<AnytypeStatus>("anytype_status", { noteId }),
+  /** Push the note as it is in the database. Flush the view's queued edits
+   *  first (`flushEdits`), exactly like the webhook. `confirmed` records the
+   *  first-push consent the modal collects. */
+  anytypeSyncNote: (noteId: string, confirmed: boolean | null) =>
+    invoke<AnytypeSyncOutcome>("anytype_sync_note", { noteId, confirmed }),
+  /** Queue every live, non-empty note; progress rides `anytype_bulk`. */
+  anytypeSyncAll: () => invoke<number>("anytype_sync_all"),
+  anytypeSyncCancel: () => invoke<void>("anytype_sync_cancel"),
+  /** A bulk run in flight, so Settings can pick its state back up. */
+  anytypeSyncState: () => invoke<AnytypeBulkProgress | null>("anytype_sync_state"),
+  /** Forget the mapping without touching the object in Anytype. */
+  anytypeUnlinkNote: (noteId: string) => invoke<void>("anytype_unlink_note", { noteId }),
   setSetting: (key: SettingsKey, value: string) => invoke<void>("settings_set", { key, value }),
   /** The global record accelerator in force (`""` = off). */
   recordHotkeyGet: () => invoke<string>("record_hotkey_get"),
@@ -984,5 +1072,16 @@ export function onNotesChanged(cb: () => void): Promise<UnlistenFn> {
 // fires.) See `resolveHotkeyAction` and `src-tauri/src/menubar.rs`.
 export function onToggleRecord(cb: () => void): Promise<UnlistenFn> {
   return listen("menubar://toggle-record", () => cb());
+}
+
+// Anytype sync (ADR 0007): per-note progress and bulk-run progress. Wired
+// once by `lib/anytype.ts`, never `recording_status` — that channel belongs
+// to live capture alone.
+export function onAnytypeSync(cb: (e: AnytypeSyncEvent) => void): Promise<UnlistenFn> {
+  return listen<AnytypeSyncEvent>("anytype_sync", (e) => cb(e.payload));
+}
+
+export function onAnytypeBulk(cb: (e: AnytypeBulkEvent) => void): Promise<UnlistenFn> {
+  return listen<AnytypeBulkEvent>("anytype_bulk", (e) => cb(e.payload));
 }
 
