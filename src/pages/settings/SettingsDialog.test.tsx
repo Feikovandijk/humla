@@ -41,6 +41,18 @@ describe("settings dialog", () => {
     ).toBeInTheDocument();
   });
 
+  it("opens as a full-screen takeover, not a popup", async () => {
+    renderApp("/");
+    await screen.findByRole("button", { name: /new note/i });
+    const settings = await openSettingsFromSidebar();
+
+    // No dimmed backdrop and no centred card: the screen is the window.
+    expect(screen.queryByTestId("settings-backdrop")).not.toBeInTheDocument();
+    expect(settings).toHaveClass("fixed", "inset-0");
+    // Still movable: the screen carries its own title-bar drag handle.
+    expect(settings.querySelector("[data-tauri-drag-region]")).toBeTruthy();
+  });
+
   it("closes on Escape and restores the previous URL", async () => {
     renderApp("/");
     await screen.findByRole("button", { name: /new note/i });
@@ -326,32 +338,6 @@ describe("settings dialog", () => {
     ).toBeInTheDocument();
   });
 
-  it("backdrop click with an open select dismisses only the select", async () => {
-    renderApp("/settings?tab=transcription");
-    const dialog = await screen.findByRole("dialog", { name: /settings/i });
-
-    const trigger = await within(dialog).findByRole("combobox", {
-      name: /^english/i,
-    });
-    await userEvent.click(trigger);
-    expect(within(dialog).getByRole("listbox")).toBeInTheDocument();
-
-    // The open listbox is modal, so the backdrop underneath is inert — the
-    // pointerdown lands on the select's dismiss layer and never reaches it.
-    fireEvent.pointerDown(screen.getByTestId("settings-backdrop"));
-
-    // First backdrop press only dismisses the popover.
-    expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("dialog", { name: /settings/i }),
-    ).toBeInTheDocument();
-
-    await userEvent.click(screen.getByTestId("settings-backdrop"));
-    expect(
-      screen.queryByRole("dialog", { name: /settings/i }),
-    ).not.toBeInTheDocument();
-  });
-
   it("⌘, with the dialog already open doesn't stack history entries", async () => {
     renderApp("/");
     await screen.findByRole("button", { name: /new note/i });
@@ -415,8 +401,8 @@ describe("settings dialog", () => {
     await screen.findByRole("button", { name: /new note/i });
     await openSettingsFromSidebar();
 
-    // The nav we clicked is still there behind the dim — settings no longer
-    // swaps the app shell out or auto-collapses the sidebar.
+    // The nav we clicked is still there behind the screen — settings no
+    // longer swaps the app shell out or auto-collapses the sidebar.
     expect(
       screen.getByRole("link", { name: /settings/i }),
     ).toBeInTheDocument();
@@ -767,20 +753,7 @@ describe("settings dialog", () => {
     ).toBeInTheDocument();
   });
 
-  it("closes when the backdrop is clicked", async () => {
-    renderApp("/");
-    await screen.findByRole("button", { name: /new note/i });
-    await openSettingsFromSidebar();
-
-    await userEvent.click(screen.getByTestId("settings-backdrop"));
-
-    expect(
-      screen.queryByRole("dialog", { name: /settings/i }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByTestId("location")).toHaveTextContent(/^\/$/);
-  });
 });
-
 
 describe("Parakeet with local-only settings", () => {
   it("keeps the chosen on-device engine and its language overrides", async () => {
