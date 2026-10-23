@@ -391,11 +391,11 @@ function toolbarCase(
 }
 
 // Every settings-section scenario stands its section in the same scrollable
-// column the dialog gives it. A shared wrap because a section judged in a
+// column the screen gives it. A shared wrap because a section judged in a
 // wider or narrower box than the real one is judged against the wrong layout.
 const settingsWrap: Scenario["wrap"] = (node) => (
   <div className="flex-1 min-h-0 overflow-y-auto">
-    <div className="max-w-2xl mx-auto px-8 py-7">{node}</div>
+    <div className="max-w-2xl mx-auto px-8 pt-12 pb-7">{node}</div>
   </div>
 );
 
@@ -1118,6 +1118,14 @@ const CASES: Record<string, Scenario> = {
     render: () => null,
     ipc: { notes_list: () => demoNotes(), folders_list: () => DEMO_FOLDERS },
   },
+  // The settings screen as a full-window takeover — no backdrop, no centred
+  // card. Whole-app render because the point is the screen against the shell
+  // it replaces.
+  "settings-screen": {
+    route: "/settings?tab=general",
+    render: () => null,
+    ipc: { notes_list: () => demoNotes(), folders_list: () => DEMO_FOLDERS },
+  },
   // --- #90: the automatic titler's two states. Compare `title-writing` against
   // `title-idle` and `title-idle-long` — nothing below the title may shift.
   "title-idle": titleCase(false, "Recording 19 Aug 14:32"),
@@ -1692,7 +1700,7 @@ const onboardingCanvas = (node: React.ReactNode) => (
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <div className="relative h-screen w-full flex flex-col bg-[var(--color-canvas)]">
-      <p hidden={which === "home"} className="pt-4 text-center text-xs text-[var(--color-text-muted)]">
+      <p hidden={which === "home" || which === "settings-screen"} className="pt-4 text-center text-xs text-[var(--color-text-muted)]">
         mock case: <code>{which}</code> — {Object.keys(CASES).join(" · ")}
       </p>
       {scenario.route ? (

@@ -5,7 +5,7 @@ import App from "../App";
 import { mockTauri } from "./tauri";
 
 // Surfaces the real router URL so tests can assert on it — the settings
-// dialog is route-backed, so open/close must be visible in the location.
+// screen is route-backed, so open/close must be visible in the location.
 export function LocationProbe() {
   const loc = useLocation();
   return <div data-testid="location">{loc.pathname + loc.search}</div>;

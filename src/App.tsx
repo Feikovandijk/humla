@@ -81,7 +81,7 @@ export default function App() {
 
 // Home stand-in when `/settings` is opened with no prior in-app view
 // (fresh launch on the settings URL): there's nothing to restore behind
-// the dialog, so it dims Home.
+// the screen, so Home sits underneath.
 const HOME_FALLBACK = {
   pathname: "/",
   search: "",
@@ -93,8 +93,9 @@ const HOME_FALLBACK = {
 function AppRoutes() {
   const location = useLocation();
   const navigate = useNavigate();
-  // `/settings` renders as a dialog OVER the app, not as a page swap: the
-  // routed view underneath keeps showing the last non-settings location.
+  // `/settings` renders as a full-screen takeover OVER the app, not as a
+  // page swap: the routed view underneath keeps showing the last
+  // non-settings location, so closing restores it intact.
   const isSettings = location.pathname.startsWith("/settings");
   const [background, setBackground] = useState<Location | null>(null);
   useEffect(() => {
@@ -104,7 +105,7 @@ function AppRoutes() {
   const displayLocation = isSettings ? (background ?? HOME_FALLBACK) : location;
 
   // Closing pops the history entry the entry point pushed, landing back on
-  // the view behind the dialog. Opened cold (no background) there's nothing
+  // the view behind the screen. Opened cold (no background) there's nothing
   // to pop to — replace with Home.
   const closeSettings = () => {
     if (background) navigate(-1);
