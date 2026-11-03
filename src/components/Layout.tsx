@@ -43,8 +43,8 @@ export function Layout() {
   }, []);
 
   // Auto-collapse when the window is too narrow to fit sidebar + content.
-  // (Settings no longer collapses anything — it renders as a dialog over
-  // the shell, so Layout never even sees a /settings location.)
+  // (Settings no longer collapses anything — it renders as a full-screen
+  // takeover over the shell, so Layout never even sees a /settings location.)
   const shouldAutoCollapse = viewportWidth < NARROW_VIEWPORT_PX;
 
   // Drop any manual override when the auto trigger flips. If the viewport
