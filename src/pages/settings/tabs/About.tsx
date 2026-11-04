@@ -95,7 +95,7 @@ export function AboutTab() {
             className="text-sm cursor-default select-none inline-block"
             onClick={handleVersionTap}
           >
-            {version || "—"}
+            {version || "-"}
           </div>
           {tapHint && (
             <p className="text-xs text-[var(--color-text-muted)] mt-1">
@@ -142,7 +142,7 @@ export function AboutTab() {
         <Row label="Data directory">
           <div className="flex items-center gap-2">
             <code className="nd-code px-2 py-1 rounded bg-[var(--color-pill-hover)] flex-1 break-all">
-              {dataDir || "—"}
+              {dataDir || "-"}
             </code>
             <Btn onClick={() => dataDir && openExternal(dataDir)} disabled={!dataDir}>
               Open in Finder

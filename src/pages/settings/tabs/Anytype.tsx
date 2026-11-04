@@ -299,7 +299,7 @@ function AnytypeForm() {
         )}
         {spaceChanged && (
           <p role="status" className="text-sm text-[var(--color-text-muted)]">
-            Notes already synced stay in “{spaceChanged}” — they’ll be sent to the new space
+            Notes already synced stay in “{spaceChanged}”, they’ll be sent to the new space
             the next time each is synced.
           </p>
         )}

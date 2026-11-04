@@ -37,7 +37,7 @@ export function RecordingSection({
           description={
             keeping
               ? "Keep recordings for playback and speaker re-detection. Export microphone and system WAVs from the note menu. Roughly 1 MB per minute per channel."
-              : "No audio is stored on this Mac — transcript only; playback and speaker re-detection unavailable."
+              : "No audio is stored on this Mac, transcript only; playback and speaker re-detection unavailable."
           }
           control={
             <Toggle
@@ -169,7 +169,7 @@ function StoredAudioCleanup() {
     return (
       <Row label="Stored audio">
         <p className="text-xs text-[var(--color-text-muted)]">
-          No audio stored — transcripts and speaker labels are untouched.
+          No audio stored. transcripts and speaker labels are untouched.
         </p>
       </Row>
     );
@@ -178,7 +178,7 @@ function StoredAudioCleanup() {
   return (
     <Row
       label="Stored audio"
-      description={`${stats.notes} note${plural(stats.notes)} · ${formatBytes(stats.bytes)}. Deleting keeps every transcript, speaker label and timeline — only the audio goes.`}
+      description={`${stats.notes} note${plural(stats.notes)} · ${formatBytes(stats.bytes)}. Deleting keeps every transcript, speaker label and timeline, only the audio goes.`}
       control={
         <div className="flex flex-col items-end gap-1">
           {armed ? (
