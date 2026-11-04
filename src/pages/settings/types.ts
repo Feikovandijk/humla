@@ -98,9 +98,9 @@ export const CHAT_PROVIDERS = CHAT_CAPABLE.map((id) => ({
 }));
 
 export const WHISPER_PRESETS = [
-  { value: "fast", label: "Fast — lower latency, may drop borderline words" },
-  { value: "balanced", label: "Balanced — good speed and accuracy" },
-  { value: "quality", label: "Quality — slowest, best for meetings" },
+  { value: "fast", label: "Fast: lower latency, may drop borderline words" },
+  { value: "balanced", label: "Balanced: good speed and accuracy" },
+  { value: "quality", label: "Quality: slowest, best for meetings" },
 ];
 
 export const THEMES: { value: Theme; label: string }[] = [

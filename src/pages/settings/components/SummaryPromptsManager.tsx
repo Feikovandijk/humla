@@ -87,7 +87,7 @@ export function SummaryPromptsManager({ language }: { language: string }) {
           Built-in
         </p>
         <p className="text-xs text-[var(--color-text-muted)]">
-          Maintained presets — adapt automatically to the recording's
+          Maintained presets, adapt automatically to the recording's
           language. Read-only.
         </p>
         <div className="flex flex-wrap gap-2">
@@ -128,7 +128,7 @@ export function SummaryPromptsManager({ language }: { language: string }) {
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium truncate">{p.name}</div>
                       <p className="text-xs text-[var(--color-text-muted)] truncate">
-                        {p.content.split("\n")[0].slice(0, 80) || "—"}
+                        {p.content.split("\n")[0].slice(0, 80) || "-"}
                       </p>
                     </div>
                     <div className="flex gap-2">
@@ -165,7 +165,7 @@ export function SummaryPromptsManager({ language }: { language: string }) {
       </div>
 
       <p className="text-xs text-[var(--color-text-muted)]">
-        Tip: custom prompts run literally — write them in the language you
+        Tip: custom prompts run literally, write them in the language you
         want the summary in, or include a line like "Reply in Norwegian".
         Built-in presets handle the language switch for you automatically.
       </p>
