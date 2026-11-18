@@ -21,6 +21,7 @@ import { ContextMenu, ContextMenuItem } from "./ContextMenu";
 import { Modal } from "../pages/settings/components/Modal";
 import { SetupNag } from "./SetupNag";
 import { ImportDialog } from "./ImportDialog";
+import { importFiles, useImportQueue } from "../lib/importQueue";
 import { ChatConversations } from "./ChatConversations";
 import { trafficLightSpacerCssPx, useZoomStore } from "../lib/zoom";
 
@@ -52,14 +53,14 @@ export function Sidebar({ onCollapse }: { onCollapse: () => void }) {
   const notes = useNotesStore((s) => s.notes);
   const folders = useNotesStore((s) => s.folders);
   const removeLocal = useNotesStore((s) => s.removeLocal);
-  const upsertLocal = useNotesStore((s) => s.upsertLocal);
   const upsertFolder = useNotesStore((s) => s.upsertFolder);
   const [q, setQ] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
-  // Path of the file awaiting an import-config dialog. Non-null while the
-  // dialog is open, between picking the file and confirming language/speakers.
-  const [importPath, setImportPath] = useState<string | null>(null);
+  // Paths awaiting the import-config dialog. Non-null while the dialog is
+  // open, between picking the files and confirming language/speakers.
+  const [importPaths, setImportPaths] = useState<string[] | null>(null);
+  const queuedImports = useImportQueue((s) => s.pending.length);
 
   // Import an existing audio file. Step 1: pick the file. We then open a config
   // dialog (language + speakers) rather than importing immediately — the
@@ -69,7 +70,7 @@ export function Sidebar({ onCollapse }: { onCollapse: () => void }) {
     let selected: string | string[] | null;
     try {
       selected = await open({
-        multiple: false,
+        multiple: true,
         filters: [
           {
             name: "Audio",
@@ -81,20 +82,20 @@ export function Sidebar({ onCollapse }: { onCollapse: () => void }) {
     } catch {
       return; // dialog unavailable / cancelled
     }
-    if (typeof selected !== "string") return; // cancelled or multi (shouldn't happen)
-    setImportPath(selected);
+    const paths = typeof selected === "string" ? [selected] : selected;
+    if (!paths?.length) return; // cancelled
+    setImportPaths(paths);
   }
 
-  // Step 2: config confirmed. Create the note with the chosen language +
-  // speaker hint and kick off the pipeline; navigate so the transcript fills
-  // in live. Throws propagate to the dialog, which surfaces the error inline.
+  // Step 2: config confirmed. The first file starts now if nothing else holds
+  // the capture slot, and we navigate so its transcript fills in live; the rest
+  // queue behind it. Throws propagate to the dialog, which shows them inline.
   async function confirmImport(language: string, expectedSpeakers: number | null) {
-    const path = importPath;
-    if (!path) return;
-    const note = await ipc.importAudio(path, language, expectedSpeakers);
-    upsertLocal(note);
-    setImportPath(null);
-    navigate(`/note/${note.id}`);
+    const paths = importPaths;
+    if (!paths) return;
+    const note = await importFiles(paths.map((path) => ({ path, language, expectedSpeakers })));
+    setImportPaths(null);
+    if (note) navigate(`/note/${note.id}`);
   }
 
   async function deleteNote(e: React.MouseEvent, id: string) {
@@ -241,6 +242,11 @@ export function Sidebar({ onCollapse }: { onCollapse: () => void }) {
           >
             <FileAudio size={16} strokeWidth={1.6} className="shrink-0 opacity-85" />
             <span className="flex-1 truncate text-left">Import audio</span>
+            {queuedImports > 0 && (
+              <span className="text-xs text-[var(--color-text-muted)]" title="Files waiting to import">
+                {queuedImports} queued
+              </span>
+            )}
           </button>
         </div>
 
@@ -338,10 +344,10 @@ export function Sidebar({ onCollapse }: { onCollapse: () => void }) {
         title="⌘,"
       />
 
-      {importPath && (
+      {importPaths && (
         <ImportDialog
-          path={importPath}
-          onCancel={() => setImportPath(null)}
+          paths={importPaths}
+          onCancel={() => setImportPaths(null)}
           onConfirm={confirmImport}
         />
       )}

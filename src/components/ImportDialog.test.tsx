@@ -8,7 +8,7 @@ describe("ImportDialog", () => {
     mockTauri({ settings_get: () => "en" });
     render(
       <ImportDialog
-        path="/Users/me/meeting.m4a"
+        paths={["/Users/me/meeting.m4a"]}
         onCancel={() => {}}
         onConfirm={vi.fn()}
       />,

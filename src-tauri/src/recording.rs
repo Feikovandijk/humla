@@ -33,6 +33,10 @@ impl TranscriptTrail {
     }
 
     pub fn push(&mut self, text: &str) {
+        // Whisper marks a fragment's cut edges with "...", and a prompt full of
+        // them is a style it copies: every later chunk comes back as
+        // "...word... ...word...". The transcript keeps them; the prompt doesn't.
+        let text = text.replace('…', " ").replace("...", " ");
         for w in text.split_whitespace() {
             if self.words.len() == self.capacity {
                 self.words.pop_front();
@@ -2308,6 +2312,16 @@ mod tests {
         t.push("four five six");
         // capacity 5, total seen 6 words → drops "one"
         assert_eq!(t.as_prompt(), Some("two three four five six".to_string()));
+    }
+
+    #[test]
+    fn trail_drops_ellipses() {
+        let mut t = TranscriptTrail::new(50);
+        t.push("...dat je ook... ...uit een… wat...waar …");
+        assert_eq!(t.as_prompt(), Some("dat je ook uit een wat waar".to_string()));
+        let mut t = TranscriptTrail::new(50);
+        t.push("... …");
+        assert_eq!(t.as_prompt(), None);
     }
 
     #[test]
