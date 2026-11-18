@@ -1264,11 +1264,46 @@ if !isImport {
 // writers (emitting the final chunk + `full_recording`), emits `stopped`, and
 // exits. Only the mic writers are touched, so the Rust side sees a mic-only
 // session and runs the mic-only diarize branch — exactly what we want.
+/// The extension a file's leading bytes say it is, for the containers whose
+/// parser Core Audio picks by extension rather than by content.
+func sniffedAudioExtension(_ url: URL) -> String? {
+    guard let h = try? FileHandle(forReadingFrom: url) else { return nil }
+    defer { try? h.close() }
+    let b = [UInt8](h.readData(ofLength: 12))
+    guard b.count == 12 else { return nil }
+    let tag = { (r: Range<Int>) in String(bytes: b[r], encoding: .ascii) }
+    if tag(4..<8) == "ftyp" { return "m4a" }
+    if tag(0..<4) == "RIFF" && tag(8..<12) == "WAVE" { return "wav" }
+    if tag(0..<4) == "FORM" && (tag(8..<12) == "AIFF" || tag(8..<12) == "AIFC") { return "aiff" }
+    if tag(0..<4) == "caff" { return "caf" }
+    if tag(0..<4) == "fLaC" { return "flac" }
+    if tag(0..<3) == "ID3" || (b[0] == 0xFF && b[1] & 0xE0 == 0xE0) { return "mp3" }
+    return nil
+}
+
+/// Opens an import, retrying under the extension its bytes name when the file
+/// is mislabelled: an Android recorder saves AAC-in-MP4 as `.mp3`, and
+/// AVAudioFile then runs the MP3 parser on it and fails.
+func openImportFile(_ url: URL) throws -> AVAudioFile {
+    do {
+        return try AVAudioFile(forReading: url)
+    } catch {
+        guard let ext = sniffedAudioExtension(url),
+              ext != url.pathExtension.lowercased() else { throw error }
+        // The link lives in the session's temp dir, which Rust removes after the chain.
+        let link = outDir.appendingPathComponent("import-source.\(ext)")
+        try? FileManager.default.removeItem(at: link)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: url)
+        FileHandle.standardError.write(Data("import: reopening .\(url.pathExtension) as .\(ext)\n".utf8))
+        return try AVAudioFile(forReading: link)
+    }
+}
+
 func runImport(_ path: String) {
     let url = URL(fileURLWithPath: path)
     let file: AVAudioFile
     do {
-        file = try AVAudioFile(forReading: url)
+        file = try openImportFile(url)
     } catch {
         emitError("import open \(url.lastPathComponent): \(error.localizedDescription)")
         emit(["event": "stopped"])

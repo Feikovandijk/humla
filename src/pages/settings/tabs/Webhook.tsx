@@ -148,7 +148,7 @@ function EndpointForm() {
       </Row>
       <Row label="Headers">
         <p className="text-xs text-[var(--color-text-muted)] mb-2">
-          Optional, for authentication — for example Authorization with Bearer and your token.
+          Optional, for authentication, for example Authorization with Bearer and your token.
           Saved values aren’t shown again; leave one empty to keep it.
         </p>
         <div className="space-y-2">

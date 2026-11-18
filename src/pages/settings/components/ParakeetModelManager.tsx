@@ -69,7 +69,7 @@ export function ParakeetModelManager({
             </span>
             <span className="mt-0.5 block text-xs text-[var(--color-text-muted)]">
               NVIDIA Parakeet Ultra via CoreML on the Neural Engine. 25 European
-              languages, English-first — no Norwegian. No custom vocabulary or
+              languages, English-first, no Norwegian. No custom vocabulary or
               prior-context biasing.
             </span>
             {state.downloading && (

@@ -111,13 +111,13 @@ export function ChatTab({ s, update }: Pick<SettingsHook, "s" | "update">) {
         )}
         {!embed.checking && embed.dims !== null && (
           <p className="text-xs text-[var(--color-success)]">
-            Semantic search ready ✓ — {embedModel} answered with {embed.dims} dimensions.
+            Semantic search ready ✓: {embedModel} answered with {embed.dims} dimensions.
           </p>
         )}
         {!embed.checking && embed.error && (
           <>
             <p className="text-xs text-[var(--color-warning-text)]">
-              {embedModel} didn't answer at {embedUrl} — chat searches by keyword only.{" "}
+              {embedModel} didn't answer at {embedUrl}, chat searches by keyword only.{" "}
               {embed.error}
             </p>
             {isOllamaUrl(embedUrl) && (
@@ -205,8 +205,8 @@ function EmbedCorpusLine({ model }: { model: string }) {
   return (
     <div className="space-y-2">
       <p className="text-xs text-[var(--color-warning-text)]">
-        {pending} note{s(pending)} {pending === 1 ? "has" : "have"} no embedding under {model} yet
-        — chat finds {pending === 1 ? "it" : "them"} by keyword only until then.
+        {pending} note{s(pending)} {pending === 1 ? "has" : "have"} no embedding under {model} yet,
+        chat finds {pending === 1 ? "it" : "them"} by keyword only until then.
       </p>
       <button className="nd-btn" onClick={() => void embedNow()} disabled={running}>
         {running ? "Embedding…" : "Embed now"}
@@ -268,7 +268,7 @@ function RebuildIndexRow() {
               globals.css: raw warning gold doesn't clear AAA as body text. */}
           <p className="text-xs text-[var(--color-warning-text)]">
             {stale.count} recording{s(stale.count)} {stale.count === 1 ? "was" : "were"} indexed
-            before the latest improvements — chat can't tell who spoke in{" "}
+            before the latest improvements, chat can't tell who spoke in{" "}
             {stale.count === 1 ? "it" : "them"}, and its excerpts may cut mid-sentence.
           </p>
           <button className="nd-btn mt-2" onClick={() => void rebuild()} disabled={running}>

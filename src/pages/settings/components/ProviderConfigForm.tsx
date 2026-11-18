@@ -43,7 +43,7 @@ export function ProviderConfigForm({
     <>
       <Row
         label="Model"
-        description="Only downloaded models are offered — download more in the list above."
+        description="Only downloaded models are offered. download more in the list above."
         control={
           <Select
             value={model}
@@ -78,7 +78,7 @@ export function LocalTuningRows<T extends LocalConfig>({
     <>
       <Row
         label="Quality"
-        description="Speed vs accuracy for on-device Whisper — Quality uses beam search and catches more borderline words."
+        description="Speed vs accuracy for on-device Whisper: Quality uses beam search and catches more borderline words."
         control={
           <Select
             value={value.preset}
@@ -89,7 +89,7 @@ export function LocalTuningRows<T extends LocalConfig>({
       />
       <Row
         label="Use Metal (Apple GPU)"
-        description="Runs Whisper inference on the GPU — much faster on Apple Silicon."
+        description="Runs Whisper inference on the GPU, much faster on Apple Silicon."
         control={
           <Toggle
             label="Use Metal (Apple GPU) for Whisper inference"

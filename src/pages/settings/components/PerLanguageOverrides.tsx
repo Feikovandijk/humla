@@ -32,7 +32,7 @@ export function PerLanguageOverrides({
     <div className="flex flex-col gap-3">
       <p className="text-xs text-[var(--color-text-muted)]">
         Override the default model for specific recording languages.
-        Useful when one model is materially better for a given language —
+        Useful when one model is materially better for a given language,
         e.g. Parakeet Ultra for English.
       </p>
 
@@ -49,7 +49,7 @@ export function PerLanguageOverrides({
         </div>
       ) : (
         <p className="text-xs text-[var(--color-text-muted)] italic">
-          No overrides — every recording uses the default model.
+          No overrides. every recording uses the default model.
         </p>
       )}
 
@@ -186,7 +186,7 @@ function AddOverrideForm({
         />
       ) : (
         <p className="text-xs text-[var(--color-text-muted)]">
-          No downloaded model can transcribe this language — download one in the list above.
+          No downloaded model can transcribe this language. download one in the list above.
         </p>
       )}
       <div className="flex items-center gap-2">
