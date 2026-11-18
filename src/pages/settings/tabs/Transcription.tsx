@@ -235,14 +235,14 @@ export function TranscriptionTab({
           />
           <ThresholdRow
             label="Silence RMS threshold"
-            description="Chunks quieter than this are skipped before Whisper sees them — prevents hallucinations on near-silence and mic hiss; too high and quiet speech gets cut. Default 0.008 (pure silence ≈ 0.0001, room tone ≈ 0.001, soft speech ≈ 0.01+)."
+            description="Chunks quieter than this are skipped before Whisper sees them: prevents hallucinations on near-silence and mic hiss; too high and quiet speech gets cut. Default 0.008 (pure silence ≈ 0.0001, room tone ≈ 0.001, soft speech ≈ 0.01+)."
             value={s.silence_rms_threshold}
             placeholder="0.008"
             onChange={(v) => update("silence_rms_threshold", v)}
           />
           <p className="text-xs text-[var(--color-text-muted)]">
             Tweaks apply on the next recording or re-diarize. Diagnostic
-            JSON is dumped per run — open the Note's diagnostics folder
+            JSON is dumped per run, open the Note's diagnostics folder
             from its header to inspect where shifts landed.
           </p>
         </Disclosure>
@@ -265,7 +265,7 @@ export function TranscriptionTab({
           />
           <p className="text-xs text-[var(--color-text-muted)] mt-2">
             Comma- or newline-separated. Names, jargon, and uncommon
-            spellings — biases the transcriber toward these tokens.
+            spellings, biases the transcriber toward these tokens.
           </p>
         </Row>
       </Section>

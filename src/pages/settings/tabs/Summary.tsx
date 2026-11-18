@@ -42,13 +42,13 @@ export function SummaryTab({
             ariaLabel="Copy Ollama pull command"
           />
           <p className="text-xs text-[var(--color-text-muted)]">
-            On a 16 GB Mac use <code>ollama pull {RECOMMENDED_OLLAMA_MODEL_16GB}</code> instead —{" "}
+            On a 16 GB Mac use <code>ollama pull {RECOMMENDED_OLLAMA_MODEL_16GB}</code> instead.{" "}
             {RECOMMENDED_OLLAMA_MODEL} needs ~24 GB+; 9B and up will OOM during summary.
           </p>
         </div>
         <Row
           label="Thinking mode"
-          description="Qwen 3+ reasons internally before answering — sometimes higher quality, but can take many minutes on a long meeting. Ollama only; other servers ignore it."
+          description="Qwen 3+ reasons internally before answering, sometimes higher quality, but can take many minutes on a long meeting. Ollama only; other servers ignore it."
           control={
             <Toggle
               label="Enable thinking mode"

@@ -73,7 +73,7 @@ export function HotkeyField() {
       // A modifier on its own is the user mid-press — stay armed and quiet.
       if (isModifierOnly(e.code)) return;
       setHint(
-        "A global shortcut needs ⌘, ⌃ or ⌥ — otherwise it would swallow that key in every app.",
+        "A global shortcut needs ⌘, ⌃ or ⌥, otherwise it would swallow that key in every app.",
       );
     }
     window.addEventListener("keydown", onKey, true);

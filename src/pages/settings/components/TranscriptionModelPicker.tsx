@@ -139,12 +139,12 @@ export function TranscriptionModelPicker({
       </div>
       {current === null && value.provider !== "parakeet" ? (
         <p className="text-xs text-[var(--color-warning-text)] mt-2">
-          Pick a model above — recordings won’t transcribe on this Mac until one is chosen.
+          Pick a model above. recordings won’t transcribe on this Mac until one is chosen.
         </p>
       ) : (
         value.provider === "local" && !local.models.some((m) => m.id === current && m.downloaded) && (
           <p className="text-xs text-[var(--color-warning-text)] mt-2">
-            The selected model isn’t downloaded — recording won’t start until it is.
+            The selected model isn’t downloaded, recording won’t start until it is.
           </p>
         )
       )}
