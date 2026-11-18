@@ -24,11 +24,11 @@ function basename(path: string): string {
 }
 
 export function ImportDialog({
-  path,
+  paths,
   onCancel,
   onConfirm,
 }: {
-  path: string;
+  paths: string[];
   onCancel: () => void;
   onConfirm: (language: string, expectedSpeakers: number | null) => Promise<void>;
 }) {
@@ -71,14 +71,15 @@ export function ImportDialog({
       <div className="flex flex-col gap-5">
         <div className="flex items-center gap-2 text-sm text-[var(--color-text-muted)]">
           <FileAudio size={16} strokeWidth={1.6} className="shrink-0" />
-          <span className="truncate" title={path}>
-            {basename(path)}
+          <span className="truncate" title={paths.join("\n")}>
+            {paths.length === 1 ? basename(paths[0]) : `${paths.length} files`}
           </span>
         </div>
 
         <p className="text-sm text-[var(--color-text-muted)]">
-          Pick the language spoken in this file. Transcription runs once and
-          can’t be re-run per language afterward.
+          {paths.length === 1
+            ? "Pick the language spoken in this file. Transcription runs once and can’t be re-run per language afterward."
+            : "Pick the language spoken in these files. They import one after another with the same settings, and transcription can’t be re-run per language afterward."}
         </p>
 
         <div className="flex items-center justify-between gap-4">
@@ -110,7 +111,7 @@ export function ImportDialog({
             disabled={busy}
             className="text-sm px-3 py-1.5 rounded-md bg-[var(--color-text)] text-[var(--color-canvas)] hover:opacity-90 transition-opacity disabled:opacity-50"
           >
-            {busy ? "Importing…" : "Import"}
+            {busy ? "Importing…" : paths.length === 1 ? "Import" : `Import ${paths.length} files`}
           </button>
         </div>
       </div>
