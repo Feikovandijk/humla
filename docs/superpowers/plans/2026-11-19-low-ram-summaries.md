@@ -168,5 +168,5 @@ You are given one consecutive part of a meeting transcript, or notes on consecut
 
 - [ ] **Step 1: Add the constant** and the array entry; extend the header comment with one line: 8 GB Macs (MacBook Neo) run `qwen3.5:2b`, and long meetings are summarized in pieces (`summary_split.rs`).
 - [ ] **Step 2: Copy** — Settings hint becomes: `On a 16 GB Mac use <code>ollama pull {16GB}</code>, on an 8 GB Mac <code>ollama pull {8GB}</code>. {RECOMMENDED} needs ~24 GB+.` Onboarding hint gets the same 8 GB clause. `ModelSelect` labels `RECOMMENDED_OLLAMA_MODEL_8GB` as ` (8 GB Macs)`. No em dashes in new copy.
-- [ ] **Step 3: Run** `pnpm lint && pnpm build && pnpm test --run` — expect 0 lint errors, build passes, tests pass.
+- [ ] **Step 3: Run** `pnpm lint && pnpm build && pnpm test` — expect 0 lint errors, build passes, tests pass.
 - [ ] **Step 4: Commit** `feat(summary): recommend qwen3.5:2b on 8 GB Macs`.
