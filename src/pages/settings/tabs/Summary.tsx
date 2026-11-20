@@ -5,7 +5,11 @@ import { Toggle } from "../components/Toggle";
 import { SummaryPromptsManager } from "../components/SummaryPromptsManager";
 import { OllamaConnect } from "../../../components/provider/OllamaConnect";
 import { CommandSnippet } from "../../../components/CommandSnippet";
-import { RECOMMENDED_OLLAMA_MODEL, RECOMMENDED_OLLAMA_MODEL_16GB } from "../../../lib/localModels";
+import {
+  RECOMMENDED_OLLAMA_MODEL,
+  RECOMMENDED_OLLAMA_MODEL_16GB,
+  RECOMMENDED_OLLAMA_MODEL_8GB,
+} from "../../../lib/localModels";
 import { SUMMARY_PRESETS, presetLabel } from "../../../lib/presets";
 import type { SettingsHook } from "../useSettings";
 
@@ -42,8 +46,9 @@ export function SummaryTab({
             ariaLabel="Copy Ollama pull command"
           />
           <p className="text-xs text-[var(--color-text-muted)]">
-            On a 16 GB Mac use <code>ollama pull {RECOMMENDED_OLLAMA_MODEL_16GB}</code> instead —{" "}
-            {RECOMMENDED_OLLAMA_MODEL} needs ~24 GB+; 9B and up will OOM during summary.
+            On a 16 GB Mac use <code>ollama pull {RECOMMENDED_OLLAMA_MODEL_16GB}</code>, on an 8 GB
+            Mac <code>ollama pull {RECOMMENDED_OLLAMA_MODEL_8GB}</code>. {RECOMMENDED_OLLAMA_MODEL}{" "}
+            needs ~24 GB+; 9B and up will OOM during summary.
           </p>
         </div>
         <Row
