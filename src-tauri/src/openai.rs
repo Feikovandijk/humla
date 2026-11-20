@@ -986,7 +986,7 @@ struct OllamaOptions {
     // Input context window. Ollama's default is 2048 tokens — way too small
     // for meeting transcripts. Anything longer than ~1500 words is silently
     // truncated from the front. Sized adaptively at the call site based on
-    // actual prompt length + output budget, bounded [8192, 65536]. Caller
+    // actual prompt length + output budget, bounded [8192, local_ctx_cap()]. Caller
     // computes the value because too-large a window inflates KV-cache RAM
     // 2-4 GB and OOMs Ollama on tighter machines.
     num_ctx: i32,
@@ -1051,6 +1051,56 @@ where
 /// (system + reference + turns). `num_ctx` is sized adaptively from the total
 /// prompt length so long histories get a bigger KV cache without a flat 65K
 /// pinning multi-GB of RAM on tighter Macs.
+/// Largest `num_ctx` a local summary may ask for, by physical RAM. An 8 GB Mac
+/// (MacBook Neo) can't hold a model plus a 32K KV cache; unknown RAM keeps the
+/// old 64K ceiling.
+pub(crate) fn ctx_cap_for_ram(bytes: Option<u64>) -> usize {
+    const GIB: u64 = 1 << 30;
+    match bytes {
+        Some(b) if b <= 8 * GIB => 8192,
+        Some(b) if b <= 16 * GIB => 32768,
+        _ => 65536,
+    }
+}
+
+/// This Mac's cap, read once from `hw.memsize`.
+pub(crate) fn local_ctx_cap() -> usize {
+    static CAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *CAP.get_or_init(|| {
+        let mut bytes: u64 = 0;
+        let mut len = std::mem::size_of::<u64>();
+        // SAFETY: hw.memsize is a u64; `len` matches the buffer we pass.
+        let rc = unsafe {
+            libc::sysctlbyname(
+                c"hw.memsize".as_ptr(),
+                (&mut bytes as *mut u64).cast(),
+                &mut len,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        let cap = ctx_cap_for_ram((rc == 0).then_some(bytes));
+        eprintln!("[llm] ram={bytes} bytes → local num_ctx cap {cap}");
+        cap
+    })
+}
+
+/// Thinking's 8K output budget would leave an 8K context almost no room for
+/// the input, so the smallest tier never thinks.
+pub(crate) fn effective_think(think: bool, cap: usize) -> bool {
+    think && cap > 8192
+}
+
+pub(crate) fn num_predict(think: bool) -> usize {
+    if think { 8192 } else { 4096 }
+}
+
+/// How many prompt characters fit under `cap` beside the output budget, at the
+/// ~4 chars/token estimate `ollama_chat_stream` sizes `num_ctx` with.
+pub(crate) fn input_budget_chars(cap: usize, think: bool) -> usize {
+    cap.saturating_sub(num_predict(effective_think(think, cap)) + 512) * 4
+}
+
 pub(crate) async fn ollama_chat_stream<F>(
     native_base: &str,
     model: &str,
@@ -1062,7 +1112,9 @@ where
     F: FnMut(StreamChunk) + Send,
 {
     let url = format!("{native_base}/chat");
-    let num_predict: i32 = if think { 8192 } else { 4096 };
+    let cap = local_ctx_cap();
+    let think = effective_think(think, cap);
+    let num_predict = num_predict(think) as i32;
     let prompt_chars: usize = messages.iter().map(|(_, c)| c.len()).sum();
     // Adaptive num_ctx: size the KV cache to the actual prompt + output
     // budget, not a fixed 65536. A flat 65K was killing Ollama on tighter
@@ -1071,13 +1123,13 @@ where
     // on a 32 GB Mac with nothing else running, OOM otherwise. Rough
     // estimate: ~4 chars/token for English/Norwegian; round up to the
     // next power of two for clean Ollama allocation; bound to
-    // [8192, 65536]. A typical 2-hour meeting (~20K input tokens) gets
-    // 32K context — half the RAM of the old fixed value, still 10× more
-    // than Ollama's silent-truncating 2048 default.
+    // [8192, local_ctx_cap()] — the cap follows the Mac's RAM, and the
+    // summary path splits a transcript that would exceed it. A typical
+    // 2-hour meeting (~20K input tokens) gets 32K context on a big Mac.
     let approx_input_tokens = prompt_chars / 4;
     let need = approx_input_tokens + (num_predict as usize) + 512;
     let mut ctx: usize = 8192;
-    while ctx < need && ctx < 65536 {
+    while ctx < need && ctx < cap {
         ctx *= 2;
     }
     let num_ctx = ctx as i32;
@@ -1730,6 +1782,28 @@ pub(crate) async fn openai_embed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ram_tiers_map_to_context_caps() {
+        const GIB: u64 = 1 << 30;
+        assert_eq!(ctx_cap_for_ram(Some(8 * GIB)), 8192);
+        assert_eq!(ctx_cap_for_ram(Some(16 * GIB)), 32768);
+        assert_eq!(ctx_cap_for_ram(Some(24 * GIB)), 65536);
+        assert_eq!(ctx_cap_for_ram(None), 65536);
+    }
+
+    #[test]
+    fn think_is_forced_off_at_the_smallest_tier() {
+        assert!(!effective_think(true, 8192));
+        assert!(effective_think(true, 32768));
+        assert!(!effective_think(false, 65536));
+    }
+
+    #[test]
+    fn input_budget_leaves_room_for_output() {
+        assert_eq!(input_budget_chars(8192, true), (8192 - 4096 - 512) * 4);
+        assert_eq!(input_budget_chars(32768, true), (32768 - 8192 - 512) * 4);
+    }
 
     #[test]
     fn a_model_listing_is_narrowed_to_chat_models() {
