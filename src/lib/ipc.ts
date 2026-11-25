@@ -212,6 +212,10 @@ export type SettingsKey =
   // menu offers the sync. The API key is a secret and lives in the Keychain
   // (`anytypeConfigGet` reports only `hasKey`), like the webhook's endpoint.
   | "anytype_enabled"
+  // Export to Obsidian: the vault folder ⋯ → Export to Obsidian writes into
+  // ("" = not set, menu item hidden), and whether the transcript goes along.
+  | "obsidian_vault_path"
+  | "obsidian_include_transcript"
   | "silence_rms_threshold"
   // Menu-bar mode (#21). `close_to_tray` off means the close button still
   // quits; on, it hides the window and drops the Dock icon so a tray- or
@@ -598,6 +602,8 @@ export const ipc = {
 
   exportNote: (noteId: string, spec: ExportSpec) =>
     invoke<void>("export_note", { noteId, spec }),
+  // Write the note into the Obsidian vault folder from Settings; resolves to the path.
+  exportNoteObsidian: (noteId: string) => invoke<string>("export_note_obsidian", { noteId }),
   rediarizeNote: (noteId: string) => invoke<void>("rediarize_note", { noteId }),
 
   summaryPromptsList: () => invoke<SummaryPrompt[]>("summary_prompts_list"),
