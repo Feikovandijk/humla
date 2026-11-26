@@ -21,6 +21,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 // Resolved provider for a single summary call. Both cloud OpenAI and any
 // local OpenAI-compatible server (Ollama, LM Studio, llama-server, vLLM)
 // flow through this same shape — the only difference is `base_url`.
+#[derive(Clone)]
 pub(super) struct ResolvedProvider {
     pub(super) provider: ProviderId,
     pub(super) base_url: String,
@@ -340,6 +341,23 @@ async fn run_summary(app: AppHandle, note_id: String) -> anyhow::Result<()> {
             );
         }
     };
+    let budget = openai::input_budget_chars(openai::local_ctx_cap(), provider.think);
+    let user_message = if should_split(
+        provider.provider == ProviderId::Local,
+        &note.transcript,
+        full_prompt.len() + user_message.len(),
+        budget,
+    ) {
+        let text = map_transcript(&app, &note_id, &provider, &language, &note.transcript, |text| {
+            full_prompt.len() + notes_block.len() + text.len() + 64 <= budget
+        }, budget)
+        .await?;
+        format!(
+            "{notes_block}\n\n[Transkripsjon]\n(notes on consecutive parts of the transcript, in order)\n{text}"
+        )
+    } else {
+        user_message
+    };
     let summary = provider.complete(&full_prompt, &user_message, on_chunk).await?;
     let state: State<AppState> = app.state();
     {
@@ -356,6 +374,68 @@ async fn run_summary(app: AppHandle, note_id: String) -> anyhow::Result<()> {
     tauri::async_runtime::spawn(super::chat::embed_note_bg(app.clone(), note_id.clone()));
     let _ = app.emit("summary_ready", SummaryPayload { note_id, summary });
     Ok(())
+}
+
+/// Rounds of piece-summarizing before the final call runs regardless, so piece
+/// summaries that never shrink enough can't loop forever.
+const MAX_REDUCE_ROUNDS: usize = 3;
+
+/// Split only a local summary whose prompt overflows the budget and that has a
+/// transcript to split; notes alone overflowing go through as one call.
+fn should_split(is_local: bool, transcript: &str, prompt_chars: usize, budget: usize) -> bool {
+    is_local && prompt_chars > budget && !transcript.trim().is_empty()
+}
+
+/// Rounds the map step may run. When even an empty transcript wouldn't fit
+/// (typed notes alone overflow), more rounds can't help and only cost detail.
+fn map_rounds(fits: impl Fn(&str) -> bool) -> usize {
+    if fits("") { MAX_REDUCE_ROUNDS } else { 1 }
+}
+
+/// The fixed prompt each piece of a split transcript is summarized with.
+fn map_prompt(language: &str) -> String {
+    format!(
+        "You are given one consecutive part of a meeting transcript, or notes on consecutive parts of one. Write concise bullet-point notes: key points, decisions, action items with owners, and any names, numbers and dates. Keep speaker names as written. Do not add anything that is not in the text.\n\n{}",
+        language_directive(language)
+    )
+}
+
+/// Map step for a transcript too long for the local model's context: split it,
+/// summarize each piece in turn (never in parallel, never thinking: RAM), and
+/// repeat on the joined results until `fits` or the round cap.
+async fn map_transcript(
+    app: &AppHandle,
+    note_id: &str,
+    provider: &ResolvedProvider,
+    language: &str,
+    transcript: &str,
+    fits: impl Fn(&str) -> bool,
+    budget: usize,
+) -> anyhow::Result<String> {
+    let mapper = ResolvedProvider { think: false, ..provider.clone() };
+    let prompt = map_prompt(language);
+    let mut text = transcript.to_string();
+    for round in 1..=map_rounds(&fits) {
+        let pieces =
+            super::summary_split::split_transcript(&text, super::summary_split::piece_budget(budget, prompt.len()));
+        eprintln!("[llm] summary split: {} pieces, round {round}", pieces.len());
+        let mut results = Vec::with_capacity(pieces.len());
+        for (i, piece) in pieces.iter().enumerate() {
+            let _ = app.emit(
+                "summary_thinking_delta",
+                StreamDeltaPayload {
+                    note_id: note_id.to_string(),
+                    delta: format!("Summarizing part {} of {}…\n", i + 1, pieces.len()),
+                },
+            );
+            results.push(mapper.complete(&prompt, piece, |_| {}).await?);
+        }
+        text = results.join("\n\n");
+        if fits(&text) {
+            break;
+        }
+    }
+    Ok(text)
 }
 
 fn emit_summary_status(app: &AppHandle, note_id: &str, active: bool) {
@@ -397,6 +477,22 @@ pub(super) fn language_directive(lang: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_local_overflowing_transcript_is_split() {
+        assert!(should_split(true, "words", 200, 100));
+        assert!(!should_split(true, "words", 50, 100));
+        assert!(!should_split(false, "words", 200, 100));
+        // Notes alone overflowing: nothing to split, keep the (ingen) block.
+        assert!(!should_split(true, "  \n", 200, 100));
+    }
+
+    #[test]
+    fn notes_too_big_to_fit_get_a_single_map_round() {
+        assert_eq!(map_rounds(|_| true), MAX_REDUCE_ROUNDS);
+        assert_eq!(map_rounds(|t| t.len() < 10), MAX_REDUCE_ROUNDS);
+        assert_eq!(map_rounds(|_| false), 1);
+    }
 
     fn temp_conn() -> (tempfile::TempDir, rusqlite::Connection) {
         let dir = tempfile::tempdir().unwrap();
