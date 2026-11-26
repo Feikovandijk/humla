@@ -35,6 +35,7 @@ pub(crate) mod notes;
 mod permissions;
 mod settings;
 mod summary;
+mod summary_split;
 mod summary_prompts;
 mod title;
 mod transcription_config;

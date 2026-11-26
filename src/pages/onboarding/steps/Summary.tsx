@@ -43,6 +43,7 @@ import {
   RECOMMENDED_OLLAMA_MODEL,
   RECOMMENDED_OLLAMA_MODELS,
   RECOMMENDED_OLLAMA_MODEL_16GB,
+  RECOMMENDED_OLLAMA_MODEL_8GB,
   completionModels,
   isModelInstalled,
 } from "../../../lib/localModels";
@@ -581,8 +582,9 @@ function PullCommand({ copied, onCopy }: { copied: boolean; onCopy: () => void }
         </button>
       </div>
       <p className="text-[11px] text-[var(--color-text-muted)]">
-        On a 16 GB Mac, use <code>ollama pull {RECOMMENDED_OLLAMA_MODEL_16GB}</code> instead
-        — {RECOMMENDED_OLLAMA_MODEL} needs ~24 GB+.
+        On a 16 GB Mac, use <code>ollama pull {RECOMMENDED_OLLAMA_MODEL_16GB}</code> instead, on
+        an 8 GB Mac <code>ollama pull {RECOMMENDED_OLLAMA_MODEL_8GB}</code>.{" "}
+        {RECOMMENDED_OLLAMA_MODEL} needs ~24 GB+.
       </p>
     </div>
   );
@@ -618,7 +620,9 @@ function ModelSelect({
               ? " (recommended)"
               : m === RECOMMENDED_OLLAMA_MODEL_16GB
                 ? " (16 GB Macs)"
-                : ""),
+                : m === RECOMMENDED_OLLAMA_MODEL_8GB
+                  ? " (8 GB Macs)"
+                  : ""),
         })),
       ]}
       className="w-full max-w-none justify-between px-3 py-2 bg-[var(--color-input-bg)] border-[var(--color-line)] hover:bg-[var(--color-input-bg)] focus:border-[var(--color-text-muted)]"

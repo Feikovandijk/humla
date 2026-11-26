@@ -6,8 +6,11 @@
 // and the MLX build is fast on Apple Silicon — but it wants ~24-32 GB of RAM.
 // On 16 GB Macs it OOMs, so qwen3.5:4b stays the fallback there (it also suits
 // the Qwen-tuned sampling profile in src-tauri/src/openai.rs). Recommend by tier.
+// 8 GB Macs (MacBook Neo) run qwen3.5:2b, and long meetings are summarized in
+// pieces there (src-tauri/src/commands/summary_split.rs).
 export const RECOMMENDED_OLLAMA_MODEL = "gemma4:12b-mlx";
 export const RECOMMENDED_OLLAMA_MODEL_16GB = "qwen3.5:4b";
+export const RECOMMENDED_OLLAMA_MODEL_8GB = "qwen3.5:2b";
 
 /// The recommendations in preference order, highest RAM tier first. Callers that
 /// need "the best recommended model this machine actually has" walk this rather
@@ -16,6 +19,7 @@ export const RECOMMENDED_OLLAMA_MODEL_16GB = "qwen3.5:4b";
 export const RECOMMENDED_OLLAMA_MODELS = [
   RECOMMENDED_OLLAMA_MODEL,
   RECOMMENDED_OLLAMA_MODEL_16GB,
+  RECOMMENDED_OLLAMA_MODEL_8GB,
 ] as const;
 
 // The local embedding model for semantic chat retrieval (issue #48). Small
