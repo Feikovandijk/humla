@@ -6,6 +6,7 @@ import { Toggle } from "../components/Toggle";
 import type { EditableKey } from "../types";
 import { WebhookRows } from "./Webhook";
 import { AnytypeRows } from "./Anytype";
+import { ObsidianRows } from "./Obsidian";
 
 // The ways the user's own tools reach their notes: the MCP server (#172), which
 // they read from, and the webhook (#213, `WebhookRows`), which a note is sent to.
@@ -93,6 +94,7 @@ export function IntegrationsSection({
       )}
       <WebhookRows s={s} update={update} />
       <AnytypeRows s={s} update={update} />
+      <ObsidianRows s={s} update={update} />
     </Section>
   );
 }

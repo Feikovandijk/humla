@@ -180,6 +180,79 @@ pub fn export_note(app: AppHandle, note_id: String, spec: ExportSpec) -> Result<
     Ok(())
 }
 
+/// YAML frontmatter Obsidian reads as note properties: the day the note was
+/// created (local time), fixed tags, and the speakers in order of first turn.
+fn obsidian_frontmatter(created_at_ms: i64, transcript: &str) -> String {
+    use chrono::TimeZone;
+    let date = chrono::Local
+        .timestamp_millis_opt(created_at_ms)
+        .single()
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_default();
+    let mut speakers: Vec<&str> = Vec::new();
+    for (label, _) in transcript.lines().filter_map(export_doc::split_label) {
+        if !speakers.contains(&label) {
+            speakers.push(label);
+        }
+    }
+    let mut out = format!("---\ndate: {date}\ntags:\n  - humla\n  - meeting\nspeakers:");
+    if speakers.is_empty() {
+        out.push_str(" []");
+    }
+    for s in speakers {
+        // JSON string escaping is valid YAML double-quoted scalar syntax.
+        out.push_str(&format!("\n  - {}", serde_json::Value::from(s)));
+    }
+    out.push_str("\n---\n\n");
+    out
+}
+
+/// A file name Obsidian accepts: drops characters it refuses in note names
+/// (`\ / : * ? " < > | # ^ [ ]`) and control characters.
+fn obsidian_file_name(title: &str) -> String {
+    let cleaned: String = display_title(title)
+        .chars()
+        .filter(|c| !c.is_control() && !"\\/:*?\"<>|#^[]".contains(*c))
+        .collect();
+    let cleaned = cleaned.trim().trim_start_matches('.').trim();
+    format!("{}.md", if cleaned.is_empty() { "Untitled note" } else { cleaned })
+}
+
+/// One-click export into the Obsidian vault folder set in Settings: summary on
+/// top, transcript below unless `obsidian_include_transcript` is off. Writes
+/// `<vault>/<Title>.md`, overwriting it on re-export. Returns the path written.
+#[tauri::command]
+pub fn export_note_obsidian(app: AppHandle, note_id: String) -> Result<String, String> {
+    let state: tauri::State<AppState> = app.state();
+    let (note, vault, include_transcript) = {
+        let conn = state.db.lock();
+        let note = db::get_note(&conn, &note_id).map_err(err)?;
+        let vault = db::get_setting(&conn, "obsidian_vault_path").map_err(err)?.unwrap_or_default();
+        let include = db::get_setting(&conn, "obsidian_include_transcript").map_err(err)?;
+        (note, vault, include.as_deref() != Some("false"))
+    };
+    let vault = std::path::PathBuf::from(vault.trim());
+    if vault.as_os_str().is_empty() {
+        return Err("Choose an Obsidian vault folder in Settings → General → Integrations first.".into());
+    }
+    if !vault.is_dir() {
+        return Err(format!("The Obsidian folder {} doesn't exist.", vault.display()));
+    }
+    let spec = ExportSpec {
+        path: String::new(),
+        format: ExportFormat::Markdown,
+        include_summary: true,
+        include_transcript,
+        include_notes: false,
+        include_speaker_labels: true,
+    };
+    let mut doc = obsidian_frontmatter(note.created_at, &note.transcript);
+    doc.push_str(&build_export_document(&note.title, &note.summary, &note.transcript, &note.body, &spec));
+    let path = vault.join(obsidian_file_name(&note.title));
+    std::fs::write(&path, doc).map_err(|e| format!("write Obsidian note: {e}"))?;
+    Ok(path.display().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,5 +411,21 @@ mod tests {
         assert_eq!(f, ExportFormat::Markdown);
         let f: ExportFormat = serde_json::from_str("\"txt\"").unwrap();
         assert_eq!(f, ExportFormat::Txt);
+    }
+
+    #[test]
+    fn obsidian_frontmatter_lists_speakers_once_in_order() {
+        let fm = obsidian_frontmatter(0, "Hege: hi\nSpeaker 1: yo\nHege: again\nno label here");
+        assert!(fm.starts_with("---\ndate: "));
+        assert!(fm.contains("tags:\n  - humla\n  - meeting\n"));
+        assert!(fm.contains("speakers:\n  - \"Hege\"\n  - \"Speaker 1\"\n---\n\n"));
+        assert!(obsidian_frontmatter(0, "").contains("speakers: []\n---"));
+    }
+
+    #[test]
+    fn obsidian_file_name_drops_forbidden_chars() {
+        assert_eq!(obsidian_file_name("Q3: plan/review #1 [draft]?"), "Q3 planreview 1 draft.md");
+        assert_eq!(obsidian_file_name("  "), "Untitled note.md");
+        assert_eq!(obsidian_file_name("..."), "Untitled note.md");
     }
 }
