@@ -26,14 +26,14 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 9
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # Before the build, so incomplete notes fail in a minute rather than after it.
@@ -68,7 +68,7 @@ jobs:
 
       # The sidecar scripts skip the Swift build when their binary's source-hash
       # stamp matches, so restoring both saves the FluidAudio compile (~4 min).
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             src-tauri/binaries/audio-capture-*
@@ -98,7 +98,7 @@ jobs:
           rm -rf src-tauri/target/release/bundle  # never ship a cached previous payload
           pnpm tauri build --config "{\"bundle\":{\"createUpdaterArtifacts\":$IS_RELEASE,\"macOS\":{\"signingIdentity\":\"-\"}}}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Transcriberr-${{ github.sha }}
           path: src-tauri/target/release/bundle/dmg/*.dmg
