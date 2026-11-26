@@ -1790,6 +1790,19 @@ export function NoteToolbar({
   const anytypeEnabled = useLiveSetting("anytype_enabled") === "true";
   const anytypeStatus = useAnytypeStatus(noteId);
   const [anytypeOpen, setAnytypeOpen] = useState(false);
+  const obsidianVault = useLiveSetting("obsidian_vault_path") ?? "";
+
+  async function onExportToObsidian() {
+    setMenuPos(null);
+    const { pushError, pushFlash } = useRecordingStore.getState();
+    try {
+      await flushEdits(); // the backend exports the note as the database holds it
+      await ipc.exportNoteObsidian(noteId);
+      pushFlash("Exported to Obsidian");
+    } catch (e) {
+      pushError({ noteId, message: e instanceof Error ? e.message : String(e), kind: "export" });
+    }
+  }
 
   function onSyncToAnytype() {
     setMenuPos(null);
@@ -1923,6 +1936,9 @@ export function NoteToolbar({
             >
               Export…
             </ContextMenuItem>
+          )}
+          {note && obsidianVault && (
+            <ContextMenuItem onClick={() => void onExportToObsidian()}>Export to Obsidian</ContextMenuItem>
           )}
           {note && webhookEnabled && (
             <ContextMenuItem

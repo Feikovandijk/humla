@@ -378,6 +378,7 @@ pub fn run() {
             commands::note_timeline_delete_chunk,
             commands::open_in_finder,
             commands::export_note,
+            commands::export_note_obsidian,
             commands::note_recording_audio,
             commands::export_recording_audio,
             commands::rediarize_note,

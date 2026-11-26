@@ -57,6 +57,8 @@ export const DEFAULTS: Record<EditableKey, string> = {
   mcp_enabled: "false",
   webhook_enabled: "false",
   anytype_enabled: "false",
+  obsidian_vault_path: "",
+  obsidian_include_transcript: "true",
 };
 
 export const PROVIDERS_BASE = [
